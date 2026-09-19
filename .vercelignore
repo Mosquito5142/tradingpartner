@@ -1,0 +1,12 @@
+# ไม่ต้องอัปโหลด — Vercel ติดตั้ง/บิลด์เอง
+node_modules
+.next
+legacy-python
+
+# ความลับและข้อมูลเฉพาะเครื่อง
+.env
+.env.local
+local.db*
+
+# ใช้เฉพาะตอน migrate ในเครื่อง ไม่ต้องขึ้นเซิร์ฟเวอร์
+data/reactions.seed.json
