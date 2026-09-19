@@ -1,0 +1,258 @@
+//@version=6
+// =============================================================================
+// Gold Levels — แนวรับแนวต้าน (อัลกอริทึมเดียวกับ tradingpartner.vercel.app)
+// =============================================================================
+// พอร์ตมาจาก lib/levels.ts ของเว็บ ใช้ค่าคงที่ชุดเดียวกันทุกตัว
+//
+// รวม 4 วิธีมาตรฐานแล้วจัดอันดับตามน้ำหนัก:
+//   1. โซนกลับตัว  — จุด swing high/low แบบ fractal จับกลุ่มเป็นโซน ยิ่งแตะบ่อยยิ่งหนัก
+//   2. Pivot รายวัน — PP/R1/R2/S1/S2 จาก High-Low-Close ของเมื่อวาน
+//   3. กรอบเมื่อวาน / กรอบเอเชีย (06:00-14:00 น. ไทย)
+//   4. เลขกลม ($25)
+//
+// ข้อดีที่เหนือกว่าเวอร์ชันเว็บ: ใช้ฟีดราคาของกราฟนี้โดยตรง จึงไม่มีปัญหา
+// basis/broker offset และเป็นเรียลไทม์ — ตัวเลขตรงกับกราฟที่กดออเดอร์จริง
+//
+// แนะนำให้ใช้บน timeframe 15 นาที เพื่อให้วิธีคำนวณตรงกับเว็บ
+//
+// *** เป็นเครื่องมือช่วยอ่านกราฟ ไม่ใช่สัญญาณซื้อขาย ***
+// =============================================================================
+
+indicator("Gold Levels — แนวรับแนวต้าน", shorttitle = "Gold Levels", overlay = true, max_lines_count = 100, max_labels_count = 100)
+
+// ---------------------------------------------------------------- inputs ----
+GRP_SWING = "โซนกลับตัว (Swing)"
+GRP_REF   = "ระดับอ้างอิง"
+GRP_VIEW  = "การแสดงผล"
+
+showSwing    = input.bool(true, "แสดงโซนกลับตัว", group = GRP_SWING)
+swingLen     = input.int(3, "ความยาว fractal (แท่งซ้าย/ขวา)", minval = 1, maxval = 20, group = GRP_SWING, tooltip = "เว็บใช้ 3 = จุดกลับตัวยืนยันช้า 3 แท่ง (45 นาทีบน TF 15m)")
+lookbackBars = input.int(960, "จำนวนแท่งย้อนหลังที่ใช้หาโซน", minval = 100, maxval = 5000, group = GRP_SWING, tooltip = "960 แท่ง = 10 วันบน TF 15 นาที เท่ากับที่เว็บใช้")
+zoneWidthPct = input.float(0.08, "ความกว้างโซน (% ของราคา)", minval = 0.01, maxval = 1.0, step = 0.01, group = GRP_SWING, tooltip = "0.08% ของ $4,300 ประมาณ $3.4")
+minTouches   = input.int(2, "แตะขั้นต่ำถึงจะนับเป็นโซน", minval = 1, maxval = 10, group = GRP_SWING)
+recentBars   = input.int(192, "นับว่าเพิ่งแตะภายในกี่แท่ง (น้ำหนัก x2)", minval = 1, group = GRP_SWING, tooltip = "192 แท่ง = 2 วันบน TF 15 นาที")
+
+showPivots  = input.bool(true, "Pivot รายวัน (PP/R1/R2/S1/S2)", group = GRP_REF)
+showPrevDay = input.bool(true, "High/Low เมื่อวาน", group = GRP_REF)
+showAsia    = input.bool(true, "กรอบเอเชีย 06:00-14:00 น.", group = GRP_REF)
+showRound   = input.bool(true, "เลขกลม", group = GRP_REF)
+roundStep   = input.float(25.0, "ระยะเลขกลม ($)", minval = 1.0, group = GRP_REF)
+
+maxEachSide = input.int(5, "จำนวนระดับต่อฝั่ง", minval = 1, maxval = 15, group = GRP_VIEW)
+lineWidth   = input.int(1, "ความหนาเส้น", minval = 1, maxval = 4, group = GRP_VIEW)
+showLabels  = input.bool(true, "แสดงป้ายบอกรายละเอียด", group = GRP_VIEW)
+colRes      = input.color(#e5484d, "สีแนวต้าน", group = GRP_VIEW)
+colSup      = input.color(#3fb87a, "สีแนวรับ", group = GRP_VIEW)
+
+// ------------------------------------------------- เก็บจุดกลับตัวสะสมไว้ ----
+// array คู่ขนาน (ราคา, บาร์ที่เกิด) แล้วค่อยจับกลุ่มตอนแท่งสุดท้าย
+var array<float> pivotPrice = array.new<float>()
+var array<int>   pivotBar   = array.new<int>()
+
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+// ta.pivothigh คืนค่าตอนยืนยันแล้ว ซึ่งช้ากว่าแท่งที่เป็นจุดกลับตัวจริง swingLen แท่ง
+if not na(ph)
+    array.push(pivotPrice, ph)
+    array.push(pivotBar, bar_index - swingLen)
+if not na(pl)
+    array.push(pivotPrice, pl)
+    array.push(pivotBar, bar_index - swingLen)
+
+// ตัดจุดที่เก่าเกินหน้าต่างทิ้ง — array เรียงตามเวลาอยู่แล้วจึงตัดจากหัวได้เลย
+while array.size(pivotBar) > 0 and array.get(pivotBar, 0) < bar_index - lookbackBars
+    array.shift(pivotBar)
+    array.shift(pivotPrice)
+
+// -------------------------------------- ค่าที่ต้องคำนวณทุกแท่ง (สำคัญ) ----
+// ta.* กับ request.security ต้องเรียกที่ระดับบนสุดเสมอ ห้ามอยู่ใน if
+// ไม่งั้น Pine จะคำนวณค่าผิดหรือคอมไพล์ไม่ผ่าน
+recentHigh = ta.highest(high, 96)
+recentLow  = ta.lowest(low, 96)
+
+// high[1] + lookahead_on = ค่าของวันที่ปิดไปแล้ว ไม่ repaint (รูปแบบมาตรฐานของ TradingView)
+prevHigh  = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
+prevLow   = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
+prevClose = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+
+// ------------------------------------------------------ กรอบเอเชียวันนี้ ----
+asiaNow = time(timeframe.period, "0600-1400", "Asia/Bangkok")
+var float asiaHigh = na
+var float asiaLow  = na
+if not na(asiaNow)
+    if na(asiaNow[1])
+        // เพิ่งเข้าเซสชัน — เริ่มนับใหม่
+        asiaHigh := high
+        asiaLow  := low
+    else
+        asiaHigh := math.max(nz(asiaHigh, high), high)
+        asiaLow  := math.min(nz(asiaLow, low), low)
+
+// ------------------------------------------------- ตัวช่วยเก็บ candidate ----
+// Pine ไม่มี struct ใช้ง่าย ๆ จึงเก็บเป็น array คู่ขนาน 4 ชุด
+addLevel(array<float> prices, array<float> strengths, array<string> labels, array<int> touches, float p, float s, string l, int t) =>
+    if not na(p) and p > 0
+        array.push(prices, p)
+        array.push(strengths, s)
+        array.push(labels, l)
+        array.push(touches, t)
+
+// ------------------------------------------------------ วาดตอนแท่งสุดท้าย ---
+var array<line>  drawnLines  = array.new<line>()
+var array<label> drawnLabels = array.new<label>()
+
+if barstate.islast
+    // ล้างของเก่าก่อนเสมอ ไม่งั้นเส้นจะค้างทับกันไปเรื่อย ๆ
+    if array.size(drawnLines) > 0
+        for ln in drawnLines
+            line.delete(ln)
+        array.clear(drawnLines)
+    if array.size(drawnLabels) > 0
+        for lb in drawnLabels
+            label.delete(lb)
+        array.clear(drawnLabels)
+
+    curPrice = close
+    zoneW = curPrice * zoneWidthPct / 100.0
+
+    cPrice    = array.new<float>()
+    cStrength = array.new<float>()
+    cLabel    = array.new<string>()
+    cTouch    = array.new<int>()
+
+    // ---- 1) โซนจากจุดกลับตัว -------------------------------------------
+    // จับกลุ่มโดยเทียบกับ "ราคาเริ่มโซน" ไม่ใช่จุดก่อนหน้า
+    // ไม่งั้นจุดจะต่อกันเป็นลูกโซ่จนกลายเป็นโซนเดียวกว้างเป็นร้อยเหรียญ
+    nPivots = array.size(pivotPrice)
+    if showSwing and nPivots > 0
+        pvOrder = array.sort_indices(pivotPrice, order.ascending)
+
+        float startP = na
+        float sumP   = 0.0
+        int   cnt    = 0
+        int   lastB  = 0
+
+        for i = 0 to nPivots - 1
+            k = array.get(pvOrder, i)
+            p = array.get(pivotPrice, k)
+            b = array.get(pivotBar, k)
+
+            if cnt == 0
+                startP := p
+                sumP   := p
+                cnt    := 1
+                lastB  := b
+            else if p - startP <= zoneW
+                sumP  := sumP + p
+                cnt   := cnt + 1
+                lastB := b > lastB ? b : lastB
+            else
+                if cnt >= minTouches
+                    recent = lastB >= bar_index - recentBars
+                    addLevel(cPrice, cStrength, cLabel, cTouch, sumP / cnt, cnt * (recent ? 2.0 : 1.0), "โซนกลับตัว (แตะ " + str.tostring(cnt) + " ครั้ง)", cnt)
+                startP := p
+                sumP   := p
+                cnt    := 1
+                lastB  := b
+
+        // โซนสุดท้ายที่ยังค้างอยู่
+        if cnt >= minTouches
+            recentLast = lastB >= bar_index - recentBars
+            addLevel(cPrice, cStrength, cLabel, cTouch, sumP / cnt, cnt * (recentLast ? 2.0 : 1.0), "โซนกลับตัว (แตะ " + str.tostring(cnt) + " ครั้ง)", cnt)
+
+    // ---- 2) ระดับอ้างอิง (น้ำหนัก 3) -----------------------------------
+    if showPrevDay and not na(prevHigh)
+        addLevel(cPrice, cStrength, cLabel, cTouch, prevHigh, 3.0, "High เมื่อวาน", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, prevLow, 3.0, "Low เมื่อวาน", 0)
+
+    if showPivots and not na(prevHigh)
+        pp   = (prevHigh + prevLow + prevClose) / 3.0
+        span = prevHigh - prevLow
+        addLevel(cPrice, cStrength, cLabel, cTouch, pp, 3.0, "Pivot Point", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, 2.0 * pp - prevLow, 3.0, "แนวต้าน R1", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, 2.0 * pp - prevHigh, 3.0, "แนวรับ S1", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, pp + span, 3.0, "แนวต้าน R2", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, pp - span, 3.0, "แนวรับ S2", 0)
+
+    if showAsia and not na(asiaHigh)
+        addLevel(cPrice, cStrength, cLabel, cTouch, asiaHigh, 3.0, "ยอดกรอบเอเชียวันนี้", 0)
+        addLevel(cPrice, cStrength, cLabel, cTouch, asiaLow, 3.0, "ก้นกรอบเอเชียวันนี้", 0)
+
+    // ---- 3) เลขกลม (น้ำหนัก 1) -----------------------------------------
+    if showRound
+        // ระยะที่ราคาเอื้อมถึงได้ในวันเดียว — เว็บใช้ 96 แท่งล่าสุด
+        reach     = math.max(recentHigh - recentLow, 30.0)
+        firstStep = math.floor((curPrice - reach) / roundStep) * roundStep
+        nSteps    = int(2.0 * reach / roundStep) + 2
+        for rn = 0 to nSteps
+            v = firstStep + rn * roundStep
+            if v <= curPrice + reach and math.abs(v - curPrice) > 1.0
+                addLevel(cPrice, cStrength, cLabel, cTouch, v, 1.0, "เลขกลม " + str.tostring(v, "#"), 0)
+
+    // ---- รวมระดับที่ซ้อนกัน เก็บตัวน้ำหนักสูงสุดเป็นตัวแทน ---------------
+    mPrice    = array.new<float>()
+    mStrength = array.new<float>()
+    mLabel    = array.new<string>()
+    mTouch    = array.new<int>()
+
+    nCand = array.size(cPrice)
+    if nCand > 0
+        ord = array.sort_indices(cPrice, order.ascending)
+        for i = 0 to nCand - 1
+            k = array.get(ord, i)
+            p = array.get(cPrice, k)
+            s = array.get(cStrength, k)
+            l = array.get(cLabel, k)
+            t = array.get(cTouch, k)
+
+            nm = array.size(mPrice)
+            bool didMerge = false
+            if nm > 0
+                lastP = array.get(mPrice, nm - 1)
+                if p - lastP <= zoneW
+                    lastS = array.get(mStrength, nm - 1)
+                    lastL = array.get(mLabel, nm - 1)
+                    if s > lastS
+                        // ตัวใหม่แรงกว่า จึงใช้ตัวใหม่เป็นตัวแทนของโซน
+                        array.set(mPrice, nm - 1, p)
+                        array.set(mLabel, nm - 1, l + " + " + lastL)
+                        array.set(mTouch, nm - 1, t)
+                        array.set(mStrength, nm - 1, s + lastS * 0.5)
+                    else
+                        array.set(mLabel, nm - 1, lastL + " + " + l)
+                        array.set(mStrength, nm - 1, lastS + s * 0.5)
+                    didMerge := true
+            if not didMerge
+                array.push(mPrice, p)
+                array.push(mStrength, s)
+                array.push(mLabel, l)
+                array.push(mTouch, t)
+
+    // ---- คัดเฉพาะที่ใกล้ราคาปัจจุบัน แล้ววาด ----------------------------
+    nMerged = array.size(mPrice)
+    if nMerged > 0
+        // array เรียงจากน้อยไปมาก: ก่อนราคา = แนวรับ, หลังราคา = แนวต้าน
+        int firstAbove = nMerged
+        for i = 0 to nMerged - 1
+            if array.get(mPrice, i) > curPrice
+                firstAbove := i
+                break
+
+        loIdx = int(math.max(0, firstAbove - maxEachSide))
+        hiIdx = int(math.min(nMerged - 1, firstAbove + maxEachSide - 1))
+
+        for i = loIdx to hiIdx
+            p     = array.get(mPrice, i)
+            s     = array.get(mStrength, i)
+            lab   = array.get(mLabel, i)
+            isRes = p > curPrice
+            col   = isRes ? colRes : colSup
+
+            ln = line.new(bar_index - 30, p, bar_index, p, xloc = xloc.bar_index, extend = extend.right, color = col, style = line.style_dashed, width = lineWidth)
+            array.push(drawnLines, ln)
+
+            if showLabels
+                txt = str.tostring(p, format.mintick) + "  " + lab + "  [" + str.tostring(s, "#.#") + "]"
+                lb = label.new(bar_index, p, txt, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(col, 85), textcolor = col, size = size.small)
+                array.push(drawnLabels, lb)
