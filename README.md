@@ -87,7 +87,7 @@ npx vercel
 | `TURSO_DATABASE_URL` | ✅ | URL ของ Turso |
 | `TURSO_AUTH_TOKEN` | ✅ | token ของ Turso |
 | `CRON_SECRET` | แนะนำ | กันคนอื่นเรียก `/api/collect` (Vercel ส่ง header ให้เอง) |
-| `NEXT_PUBLIC_BROKER_OFFSET` | ไม่บังคับ | ราคากราฟโบรกฯ ลบด้วยราคา spot (ค่าเริ่มต้น −3.04) |
+| `BROKER_OFFSET` | ไม่บังคับ | ราคากราฟโบรกฯ ลบด้วยราคา spot (ค่าเริ่มต้น −3.04) |
 
 `vercel.json` ตั้ง Cron ให้เก็บข้อมูลอัตโนมัติทุกชั่วโมงแล้ว (นาทีที่ 17)
 

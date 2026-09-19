@@ -23,8 +23,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="th" className={`${notoThai.variable} h-full`}>
-      <body className="min-h-full flex flex-col">
+    <html lang="th" className={`${notoThai.variable} h-full`} suppressHydrationWarning>
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <header className="border-b border-line bg-gradient-to-b from-[#1a1f29] to-[#12151b]">
           <div className="mx-auto w-full max-w-6xl px-4 py-3 flex items-center justify-between gap-4">
             <Link href="/" className="text-lg font-bold tracking-tight">

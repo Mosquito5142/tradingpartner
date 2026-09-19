@@ -18,7 +18,7 @@ export const CONFIG = {
   countries: ["US", "EU", "CN"],
   minImportance: 0,
   /** ราคาที่กราฟโบรกเกอร์แสดง ลบด้วย ราคา spot — ตั้งผ่าน env ได้ */
-  brokerOffset: Number(process.env.NEXT_PUBLIC_BROKER_OFFSET ?? -3.04),
+  brokerOffset: Number(process.env.BROKER_OFFSET ?? -3.04),
 };
 
 export interface Dashboard {
