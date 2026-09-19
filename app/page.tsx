@@ -1,69 +1,128 @@
-import Image from "next/image";
+import BriefingCard from "@/components/BriefingCard";
+import Chart, { type NewsMark } from "@/components/Chart";
+import EventList, { type EventItem } from "@/components/EventList";
+import { HourStrip, TopWindows } from "@/components/HourStrip";
+import LevelsTable from "@/components/LevelsTable";
+import RiskCalculator from "@/components/RiskCalculator";
+import { Banner, Panel } from "@/components/ui";
+import { CONFIG, loadDashboard } from "@/lib/dashboard";
+import { relativeDay, thDateTime, thFullDate, thParts, thTime, thaiPeriod } from "@/lib/time";
 
-export default function Home() {
+/** ข้อมูลตลาดเปลี่ยนตลอด — ดึงใหม่ทุก 5 นาที */
+export const revalidate = 300;
+
+export default async function Home() {
+  const d = await loadDashboard();
+  const today = thParts(d.now).dateKey;
+
+  const items: EventItem[] = d.items.map(({ event, bias, title }) => {
+    const p = thParts(event.ts);
+    return {
+      ts: event.ts,
+      time: thTime(event.ts),
+      dayKey: p.dateKey,
+      dayLabel: thFullDate(event.ts),
+      dayRelative: relativeDay(event.ts, d.now),
+      isToday: p.dateKey === today,
+      country: event.country,
+      importance: event.importance,
+      title,
+      titleEn: event.title,
+      period: thaiPeriod(event.period),
+      forecast: event.forecast,
+      previous: event.previous,
+      actual: event.actual,
+      why: bias.why,
+      // แสดงคำอธิบายเต็มเฉพาะข่าวใหญ่ ที่เหลือเก็บเป็น tooltip กันหน้ารก
+      showWhy: Boolean(bias.why) && (event.importance === 1 || bias.volatile),
+      volatile: bias.volatile,
+      kind: bias.kind,
+      dirIfHigher: bias.dirIfHigher,
+      outcome: bias.outcome,
+      surprise: bias.surprise,
+      past: event.ts < d.now,
+    };
+  });
+
+  const newsMarks: NewsMark[] = d.items
+    .filter(({ event, bias }) => thParts(event.ts).dateKey === today && (event.importance === 1 || bias.volatile))
+    .map(({ event }) => ({ ts: event.ts, label: thTime(event.ts), past: event.ts < d.now }));
+
+  const countries = [...new Set(d.items.map((i) => i.event.country))].sort();
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="flex flex-col gap-5">
+      {d.calendar.stale && (
+        <Banner>
+          ⚠️ ดึงปฏิทินจากแหล่งหลักไม่สำเร็จ — กำลังแสดงข้อมูลจากแหล่งสำรอง ({d.calendar.source})
+        </Banner>
+      )}
+
+      <BriefingCard card={d.card} />
+
+      {d.price ? (
+        <Panel>
+          <div className="mb-1 flex flex-wrap items-baseline gap-3">
+            <h2 className="text-[17px] font-semibold">แผนวันนี้</h2>
+            <span className="tnum text-[26px] font-bold text-gold">
+              {d.price.price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </span>
+            <span className="text-[12px] text-faint">
+              spot {d.price.spot ?? "—"}
+              {d.price.brokerOffset
+                ? ` · ปรับให้ตรงกราฟโบรกเกอร์แล้ว (${d.price.brokerOffset > 0 ? "+" : ""}${d.price.brokerOffset})`
+                : " · ยังไม่ได้ตั้ง broker offset"}
+              {" · อัปเดต "}
+              {thDateTime(d.price.fetchedAt)} น.
+            </span>
+          </div>
+
+          <Chart bars={d.price.bars} levels={d.levels} news={newsMarks} price={d.price.price} />
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-faint">
+            แท่งเทียน 15 นาที 24 ชั่วโมงล่าสุด · เส้นประแดง = แนวต้าน · เขียว = แนวรับ ·
+            เส้นฟ้าแนวตั้ง = เวลาข่าว · ราคาอ้างอิง PAXG ปรับฐานด้วย spot จริง อาจต่างจากโบรกเกอร์ ±1–2 เหรียญ
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+          <div className="mt-4 grid gap-6 lg:grid-cols-2">
+            <div>
+              <h3 className="text-[14.5px] font-semibold text-[#c7cdd8]">วันนี้น่าเล่นกี่โมง</h3>
+              <p className="mb-2.5 mt-0.5 max-w-[60ch] text-[12px] text-faint">
+                ความเข้มของช่องคือ &ldquo;ชั่วโมงนั้นทองเคยแกว่งแรงแค่ไหนใน 60 วันที่ผ่านมา&rdquo;
+                รวมกับน้ำหนักข่าวของวันนี้ · จุดฟ้า = มีข่าว
+              </p>
+              <div className="mb-3.5">
+                <HourStrip rows={d.hours} />
+              </div>
+              <TopWindows windows={d.windows} />
+            </div>
+
+            <div>
+              <h3 className="text-[14.5px] font-semibold text-[#c7cdd8]">แนวรับ / แนวต้าน จากกราฟ 15 นาที</h3>
+              <p className="mb-2.5 mt-0.5 max-w-[60ch] text-[12px] text-faint">
+                รวมจุดกลับตัวย้อนหลัง 10 วัน, Pivot รายวัน, กรอบเมื่อวาน/เอเชีย และเลขกลม
+              </p>
+              <LevelsTable levels={d.levels} price={d.price.price} />
+            </div>
+          </div>
+
+          <RiskCalculator
+            defaults={{ type: "cent", balance: 1455.68, risk: 2 }}
+            noise15={d.lab.noise15}
+          />
+        </Panel>
+      ) : (
+        <Banner tone="soft">ดึงราคาไม่สำเร็จ — แสดงเฉพาะปฏิทินข่าว</Banner>
+      )}
+
+      <Panel>
+        <h2 className="mb-3 text-[17px] font-semibold">
+          ปฏิทินข่าว {CONFIG.daysAhead} วันข้างหน้า
+          <span className="ml-2 text-[12px] font-normal text-faint">
+            เวลาไทย (GMT+7) · {d.items.length} รายการ · แหล่งข้อมูล {d.calendar.source}
+          </span>
+        </h2>
+        <EventList items={items} countries={countries} />
+      </Panel>
     </div>
   );
 }

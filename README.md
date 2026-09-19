@@ -1,36 +1,157 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ปฏิทินข่าวเทรดทอง XAUUSD
 
-## Getting Started
+เว็บแอป Next.js — ปฏิทินข่าวเศรษฐกิจเวลาไทย พร้อมกราฟ 15 นาที แนวรับแนวต้าน
+และ **Reaction Lab** ที่วัดว่ากฎทิศทางแม่นจริงแค่ไหนจากราคาย้อนหลัง
 
-First, run the development server:
+> ⚠️ เครื่องมือนี้รวบรวมกำหนดการข่าวและวัดสถิติจากราคาย้อนหลัง
+> **ไม่ใช่การทำนายราคาและไม่ใช่คำแนะนำการลงทุน**
+
+---
+
+## หน้าเว็บมีอะไรบ้าง
+
+| ส่วน | รายละเอียด |
+|---|---|
+| **การ์ดสรุปก่อนข่าว** | ข่าวใหญ่ตัวถัดไป + นับถอยหลังสด + คาดการณ์/ครั้งก่อน + สถิติของจริง + 3 ครั้งล่าสุด + แนวรับต้านใกล้ตัว |
+| **กราฟ 15 นาที** | SVG ล้วน 24 ชม.ล่าสุด วาดแนวรับ (เขียว) แนวต้าน (แดง) และหมุดเวลาข่าว |
+| **วันนี้น่าเล่นกี่โมง** | แถบ 24 ช่อง เข้มตามความผันผวนที่วัดได้ย้อนหลัง 60 วัน + น้ำหนักข่าววันนี้ |
+| **แนวรับ/แนวต้าน** | จุดกลับตัว 10 วัน + Pivot รายวัน + กรอบเมื่อวาน/เอเชีย + เลขกลม |
+| **คำนวณขนาดล็อต** | รองรับบัญชี Cent · เตือนเมื่อ SL แคบกว่า noise จริงหรือไม้เดียวกินพอร์ตเกิน 10% |
+| **[/lab](/lab)** | Reaction Lab — เส้นโค้งการสลายตัวของสัญญาณ แยกตามกลุ่มข่าวและรายข่าว |
+
+---
+
+## ตั้งค่าและรันในเครื่อง
 
 ```bash
+npm install
+cp .env.example .env.local     # แล้วแก้ค่าข้างใน
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+ถ้ายังไม่มี Turso สามารถใช้ไฟล์ SQLite ในเครื่องได้เลย:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+TURSO_DATABASE_URL=file:local.db
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## ตั้งค่า Turso (คลังสถิติ Reaction Lab)
 
-To learn more about Next.js, take a look at the following resources:
+จำเป็นเพราะบน Vercel ไฟล์ในดิสก์หายทุกครั้งที่ deploy และ Yahoo ให้ข้อมูล
+แท่ง 5 นาทีย้อนหลังแค่ 60 วัน — ถ้าไม่เก็บเองตัวอย่างจะไม่มีวันโตพอจะสรุปรายข่าวได้
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. สมัครฟรีที่ [turso.tech](https://turso.tech) แล้วติดตั้ง CLI
+2. สร้างฐานข้อมูลและเอา URL กับ token:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+turso db create goldnews
+turso db show goldnews --url
+turso db tokens create goldnews
+```
 
-## Deploy on Vercel
+3. ใส่ลง `.env.local` (และลง Vercel Environment Variables ตอน deploy)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+TURSO_DATABASE_URL=libsql://goldnews-xxxx.turso.io
+TURSO_AUTH_TOKEN=eyJ...
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+4. ย้ายข้อมูล 130 รายการจากเวอร์ชันเดิมเข้าไป (ถ้ามี):
+
+```bash
+node scripts/migrate.mjs ../data/reactions.json
+```
+
+5. หรือเก็บใหม่จากศูนย์:
+
+```bash
+curl "http://localhost:3000/api/collect?backfill=1"
+```
+
+ตารางถูกสร้างอัตโนมัติ ไม่ต้องรัน migration เอง
+
+---
+
+## Deploy ขึ้น Vercel
+
+```bash
+npx vercel
+```
+
+จากนั้นตั้ง Environment Variables ใน Vercel Dashboard:
+
+| ตัวแปร | ต้องมี | คำอธิบาย |
+|---|---|---|
+| `TURSO_DATABASE_URL` | ✅ | URL ของ Turso |
+| `TURSO_AUTH_TOKEN` | ✅ | token ของ Turso |
+| `CRON_SECRET` | แนะนำ | กันคนอื่นเรียก `/api/collect` (Vercel ส่ง header ให้เอง) |
+| `NEXT_PUBLIC_BROKER_OFFSET` | ไม่บังคับ | ราคากราฟโบรกฯ ลบด้วยราคา spot (ค่าเริ่มต้น −3.04) |
+
+`vercel.json` ตั้ง Cron ให้เก็บข้อมูลอัตโนมัติทุกชั่วโมงแล้ว (นาทีที่ 17)
+
+> Vercel free tier รัน cron ได้วันละครั้ง — ถ้าใช้แผนฟรี ให้แก้ schedule
+> ใน `vercel.json` เป็น `"0 6 * * *"` หรือเรียก `/api/collect` เองเป็นครั้งคราว
+
+---
+
+## Reaction Lab — ทำไมถึงมี
+
+กฎทิศทางใน `lib/bias.ts` มาจากตำรามหภาค พอเอาไปวัดกับราคาจริงพบว่า
+(ข่าวใหญ่สหรัฐฯ n=35, แท่ง 5 นาที GC=F):
+
+| หลังข่าว | ทฤษฎีถูก | ขยับมัธยฐาน |
+|---|---|---|
+| 5 นาที | 66% | $6.60 |
+| **10–15 นาที** | **71%** | **$8.90** |
+| 30 นาที | 51% | $8.00 |
+| 60 นาที | 49% | $13.90 |
+
+**กฎใช้ได้จริง แต่มีอายุราว 15 นาที** ตรวจแล้วว่าไม่ใช่ผลของเทรนด์ขาขึ้น
+(เส้นฐาน = ทองปิดบวก 51.2% ของทุกชั่วโมง ส่วนหลังข่าวขึ้น 54%)
+
+**แยกตามกลุ่ม — ต้องดู % ถูก คู่กับระยะที่ขยับเสมอ:**
+
+| กลุ่ม | n | 15 นาที ถูก | ขยับ |
+|---|---|---|---|
+| ข่าวใหญ่สหรัฐฯ | 35 | 71% | $8.90 |
+| ข่าวกลางสหรัฐฯ | 62 | 52% | $6.90 |
+| ยุโรป / จีน | 33 | 73% | $4.40 |
+
+ยุโรป/จีนแม่นสูงแต่ขยับแค่ $4.40 ซึ่งเกือบเท่าสเปรด — **ความแม่นที่ขยับน้อยกินไม่ได้จริง**
+
+---
+
+## โครงสร้าง
+
+```
+app/
+  page.tsx            หน้าหลัก (server component)
+  lab/page.tsx        Reaction Lab
+  api/collect/route.ts  เก็บข้อมูลปฏิกิริยาข่าว (Vercel Cron เรียก)
+lib/
+  time.ts             เวลาไทย GMT+7 (คำนวณเองไม่พึ่ง tz database)
+  calendar.ts         TradingView + ForexFactory (สำรอง)
+  price.ts            spot / PAXG / GC=F
+  bias.ts             กฎทิศทางทอง
+  translate.ts        คำแปลชื่อข่าว + ตัวกรองข่าวขยะ
+  levels.ts           แนวรับ/แนวต้าน
+  hours.ts            โปรไฟล์ความผันผวนรายชั่วโมง
+  reactions.ts        Reaction Lab (อ่าน/เขียน Turso)
+  briefing.ts         การ์ดสรุปก่อนข่าว
+  db.ts               Turso client + schema
+  dashboard.ts        ประกอบข้อมูลทั้งหมดของหน้าหลัก
+components/           UI (ส่วนใหญ่เป็น server component)
+scripts/migrate.mjs   ย้ายข้อมูลจาก reactions.json เดิม
+```
+
+### จุดที่ต้องระวังถ้าจะแก้โค้ด
+
+- **เวลาไทย** — Vercel รันด้วย UTC เสมอ `lib/time.ts` จึงบวก offset เองแล้วอ่านด้วย `getUTC*`
+  อย่าใช้ `toLocaleString` กับ timezone ของเซิร์ฟเวอร์
+- **TradingView ตัดข้อมูลเงียบ ๆ** ถ้าขอช่วงยาวเกิน — ดึงย้อนหลังไกลต้องใช้ `fetchRange()` ที่วนทีละ 60 วัน
+- **แนวรับแนวต้านต้องใช้ PAXG ไม่ใช่ GC=F** — ฟิวเจอร์สแพงกว่า spot ~$35 เส้นจะเพี้ยนทั้งกระดาน
+  แต่ Reaction Lab ใช้ GC=F ได้เพราะวัดแค่ส่วนต่าง
+- **การจับกลุ่มโซนแนวรับ** ต้องเทียบกับราคาเริ่มโซน ไม่ใช่จุดก่อนหน้า ไม่งั้นจุดจะต่อกันเป็นลูกโซ่
+- **ห้ามโชว์ % จากตัวอย่างน้อยกว่า 3 ครั้ง** — `MIN_SAMPLE` ใน `lib/reactions.ts`

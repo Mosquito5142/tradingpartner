@@ -1,0 +1,23 @@
+{
+  "_comment": "ตั้งค่าโปรแกรมดูข่าวทอง - แก้ไฟล์นี้ได้ตามต้องการ",
+
+  "days_ahead": 14,
+  "days_back": 1,
+
+  "countries": ["US", "EU", "CN"],
+
+  "min_importance": 0,
+
+  "open_browser": true,
+
+  "_price_comment": "ส่วนของกราฟ/แนวรับแนวต้าน - ปิดได้ด้วย show_plan: false",
+  "show_plan": true,
+
+  "_broker_offset_comment": "ราคาโบรกเกอร์คุณ ลบด้วย ราคา spot ที่โปรแกรมแสดง (เช็กใหม่ได้ตลอด)",
+  "broker_offset": -3.04,
+
+  "_risk_comment": "ค่าตั้งต้นของเครื่องคำนวณล็อต - account_type: cent หรือ standard",
+  "account_type": "cent",
+  "account_balance": 1455.68,
+  "risk_percent": 2
+}
