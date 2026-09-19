@@ -100,14 +100,28 @@ export interface PriceData {
   bars: Bar[];
   /** แท่ง 15 นาที 60 วันของ GC=F (ใช้ทำโปรไฟล์ความผันผวนรายชั่วโมง) */
   profileBars: Bar[];
+  /** แท่งเทียนมาจากไหน — PAXG ใกล้ spot กว่า แต่ Binance บล็อก IP สหรัฐฯ */
+  barSource: "PAXG" | "GC=F";
+  /** ปรับฐานด้วยราคา spot จริงได้ไหม — ถ้าไม่ได้ ระดับราคาจะเชื่อถือไม่ได้ */
+  calibrated: boolean;
   fetchedAt: number;
   errors: string[];
 }
 
+/**
+ * โหลดราคา — ออกแบบให้ไม่ผูกกับแหล่งเดียว
+ *
+ * PAXG (Binance) ให้ค่าใกล้ spot ที่สุด (ห่าง ~$5) แต่ **Binance บล็อก IP สหรัฐฯ (HTTP 451)**
+ * ซึ่ง Vercel รัน function ที่ภูมิภาค US เป็นค่าเริ่มต้น — เวอร์ชันแรกจึงใช้ได้แค่บนเครื่อง
+ * ที่ IP ไทย พอขึ้นเซิร์ฟเวอร์กราฟหายทั้งหน้า
+ *
+ * จึงสำรองด้วย GC=F ซึ่งดึงมาอยู่แล้วสำหรับโปรไฟล์รายชั่วโมง (ไม่เปลืองรีเควสต์เพิ่ม)
+ * ห่าง spot ~$35 แต่ปรับฐานด้วย spot จริงได้เหมือนกัน
+ */
 export async function loadPrice(brokerOffset = 0): Promise<PriceData | null> {
   const errors: string[] = [];
 
-  const [spotRes, paxgRes, profileRes] = await Promise.allSettled([
+  const [spotRes, paxgRes, gcfRes] = await Promise.allSettled([
     fetchSpot(),
     fetchPaxg15m(),
     fetchGcf("15m", "60d"),
@@ -116,26 +130,38 @@ export async function loadPrice(brokerOffset = 0): Promise<PriceData | null> {
   const spot = spotRes.status === "fulfilled" ? spotRes.value : null;
   if (spotRes.status === "rejected") errors.push(`ราคา spot: ${spotRes.reason}`);
 
-  if (paxgRes.status === "rejected") {
-    errors.push(`PAXG 15 นาที: ${paxgRes.reason}`);
+  const gcfBars = gcfRes.status === "fulfilled" ? gcfRes.value : [];
+  if (gcfRes.status === "rejected") errors.push(`GC=F: ${gcfRes.reason}`);
+
+  const paxgBars = paxgRes.status === "fulfilled" ? paxgRes.value : [];
+  if (paxgRes.status === "rejected") errors.push(`PAXG (Binance): ${paxgRes.reason}`);
+
+  // เลือกแหล่งแท่งเทียน: PAXG ก่อนเพราะใกล้ spot กว่า ไม่ได้ค่อยใช้ GC=F
+  const [rawBars, barSource]: [Bar[], PriceData["barSource"]] =
+    paxgBars.length ? [paxgBars, "PAXG"] : [gcfBars, "GC=F"];
+
+  if (!rawBars.length) {
+    // ล้มทั้งสองแหล่ง — log ไว้ให้เห็นใน runtime log ของ Vercel ไม่งั้นจะ debug ไม่ได้เลย
+    console.error("[price] ดึงแท่งเทียนไม่ได้ทั้ง PAXG และ GC=F:", errors.join(" | "));
     return null;
   }
-  const rawBars = paxgRes.value;
-  if (!rawBars.length) return null;
 
-  const profileBars = profileRes.status === "fulfilled" ? profileRes.value : [];
-  if (profileRes.status === "rejected") errors.push(`GC=F 60 วัน: ${profileRes.reason}`);
-
-  // ปรับ PAXG -> spot -> สเกลโบรกเกอร์
+  // ปรับแหล่งที่เลือก -> spot -> สเกลโบรกเกอร์
   const basis = spot ? spot - rawBars[rawBars.length - 1].c : 0;
   const shift = basis + brokerOffset;
 
-  // ตัดแท่งเสาร์อาทิตย์ทิ้ง — PAXG ซื้อขาย 24/7 แต่ตลาดทองจริงปิด สภาพคล่องบางมาก
+  // PAXG ซื้อขาย 24/7 แท่งเสาร์อาทิตย์สภาพคล่องบางมากต้องตัดทิ้ง
+  // (GC=F ไม่มีแท่งช่วงนั้นอยู่แล้ว กรองซ้ำก็ไม่เสียหาย)
   const bars = rawBars
     .filter((b) => isMarketOpen(b.ts))
     .map((b) => ({ ts: b.ts, o: b.o + shift, h: b.h + shift, l: b.l + shift, c: b.c + shift }));
 
-  if (!bars.length) return null;
+  if (!bars.length) {
+    console.error("[price] ไม่เหลือแท่งเทียนหลังกรองเวลาตลาด");
+    return null;
+  }
+
+  if (errors.length) console.warn("[price] บางแหล่งใช้ไม่ได้:", errors.join(" | "));
 
   return {
     price: Math.round(bars[bars.length - 1].c * 100) / 100,
@@ -143,7 +169,9 @@ export async function loadPrice(brokerOffset = 0): Promise<PriceData | null> {
     basis: Math.round(basis * 100) / 100,
     brokerOffset,
     bars,
-    profileBars,
+    profileBars: gcfBars,
+    barSource,
+    calibrated: spot !== null,
     fetchedAt: Math.floor(Date.now() / 1000),
     errors,
   };

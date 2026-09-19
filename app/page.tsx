@@ -77,10 +77,26 @@ export default async function Home() {
             </span>
           </div>
 
+          {!d.price.calibrated && (
+            <div className="mb-2">
+              <Banner>
+                ⚠️ ดึงราคา spot ไม่ได้ จึงปรับฐานไม่ได้ — <b>ระดับราคาและแนวรับแนวต้านอาจคลาดเคลื่อนหลายสิบเหรียญ</b>{" "}
+                ใช้ดูรูปทรงกราฟได้ แต่อย่าเอาตัวเลขไปตั้งออเดอร์
+              </Banner>
+            </div>
+          )}
+
           <Chart bars={d.price.bars} levels={d.levels} news={newsMarks} price={d.price.price} />
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-faint">
             แท่งเทียน 15 นาที 24 ชั่วโมงล่าสุด · เส้นประแดง = แนวต้าน · เขียว = แนวรับ ·
-            เส้นฟ้าแนวตั้ง = เวลาข่าว · ราคาอ้างอิง PAXG ปรับฐานด้วย spot จริง อาจต่างจากโบรกเกอร์ ±1–2 เหรียญ
+            เส้นฟ้าแนวตั้ง = เวลาข่าว · ราคาอ้างอิง {d.price.barSource} ปรับฐานด้วย spot จริง
+            อาจต่างจากโบรกเกอร์ ±1–2 เหรียญ
+            {d.price.errors.length > 0 && (
+              <>
+                {" · "}
+                <span className="text-[#c0a060]">แหล่งที่ใช้ไม่ได้รอบนี้: {d.price.errors.join(" · ")}</span>
+              </>
+            )}
           </p>
 
           <div className="mt-4 grid gap-6 lg:grid-cols-2">
@@ -111,7 +127,12 @@ export default async function Home() {
           />
         </Panel>
       ) : (
-        <Banner tone="soft">ดึงราคาไม่สำเร็จ — แสดงเฉพาะปฏิทินข่าว</Banner>
+        <Banner>
+          ดึงราคาไม่สำเร็จทั้ง PAXG และ GC=F — แสดงเฉพาะปฏิทินข่าว
+          <span className="block text-[12px] opacity-80">
+            ดูสาเหตุได้ที่ Vercel → Logs (โค้ดเขียน error ไว้ด้วย prefix <code>[price]</code>)
+          </span>
+        </Banner>
       )}
 
       <Panel>
