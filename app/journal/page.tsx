@@ -1,5 +1,7 @@
+import BehaviourPanel from "@/components/BehaviourPanel";
 import TradeImport from "@/components/TradeImport";
 import { Banner, Panel } from "@/components/ui";
+import { analyseBehaviour } from "@/lib/behaviour";
 import { isConfigured } from "@/lib/db";
 import { fmtThb, loadFx, supportsThb, toThb } from "@/lib/fx";
 import { thDateTime } from "@/lib/time";
@@ -11,6 +13,14 @@ import {
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "สมุดบันทึกเทรด" };
+
+/**
+ * ยอดเงินในบัญชี ณ การนำเข้าครั้งล่าสุด
+ *
+ * ใช้ทั้งเป็นค่าเริ่มต้นของฟอร์มและเป็นตัวหารของ %เสี่ยง — ต้องเป็นค่าเดียวกัน
+ * ไม่งั้นตัวเลขสองที่บนหน้าเดียวกันจะขัดกันเอง
+ */
+const ACCOUNT_BALANCE = 1618.1;
 
 interface Baht {
   /** null = ยังแปลงไม่ได้ (ไม่รู้สกุลเงินของบัญชี) */
@@ -126,10 +136,11 @@ export default async function JournalPage() {
   const currency = accountCurrency(trades);
   const canThb = Boolean(currency) && supportsThb(currency);
   const baht = { of: (amount: number) => (canThb ? toThb(amount, currency, fx.thbPerUsd) : null) };
+  const behaviour = analyseBehaviour(trades);
 
   return (
     <div className="flex flex-col gap-5">
-      <TradeImport defaultBalance={1600.7} />
+      <TradeImport defaultBalance={ACCOUNT_BALANCE} />
 
       {!trades.length ? (
         <Panel title="ยังไม่มีไม้ในสมุด">
@@ -185,6 +196,13 @@ export default async function JournalPage() {
                 </b>
               )}
             </p>
+          </Panel>
+
+          <Panel
+            title="รูปแบบการเล่นของคุณ"
+            sub="อ่านได้ตั้งแต่ไม้ไม่กี่ไม้ เพราะเป็นคำบรรยายสิ่งที่ทำไปแล้ว ไม่ใช่การประมาณค่าขอบได้เปรียบ"
+          >
+            <BehaviourPanel b={behaviour} balance={ACCOUNT_BALANCE} unit={currency || "หน่วยบัญชี"} />
           </Panel>
 
           <Panel

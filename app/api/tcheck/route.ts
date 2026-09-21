@@ -4,6 +4,8 @@ import { atr14, ema, readRegime } from "@/lib/regime";
 import { measure, MIN_SAMPLE } from "@/lib/reactions";
 import { detectCurrency } from "@/lib/mt5-import";
 import { fmtThb, supportsThb, toThb } from "@/lib/fx";
+import { analyseBehaviour, concentration, holdSplit, overlaps, reentryGaps } from "@/lib/behaviour";
+import type { Trade } from "@/lib/trades";
 import {
   adverseExcursions, expectancy, favorableExcursions, percentile, signedOutcomes, stopOutRates,
 } from "@/lib/expectancy";
@@ -26,6 +28,20 @@ const card = (over: Partial<BriefingCard> = {}): BriefingCard => ({
 });
 
 const bar = (c: number, h = c + 0.5, l = c - 0.5): Bar => ({ ts: 0, o: c, h, l, c });
+
+/** ไม้จำลอง — เวลาเป็นนาทีเพื่อให้อ่านเคสง่าย */
+const trade = (o: Partial<Trade> & { openMin: number; closeMin?: number; profit: number }): Trade => ({
+  ticket: `t${o.openMin}-${o.profit}-${o.side ?? "buy"}`,
+  symbol: "XAUUSD", side: o.side ?? "buy", lots: o.lots ?? 0.4,
+  openTs: o.openMin * 60,
+  closeTs: o.closeMin === undefined ? null : o.closeMin * 60,
+  openPrice: 4300, closePrice: 4300,
+  sl: o.sl ?? null, tp: o.tp ?? null,
+  profit: o.profit, commission: 0, swap: 0, comment: "",
+  currency: "USC", sessionTag: "", newsTag: "",
+  holdMin: o.closeMin === undefined ? null : o.closeMin - o.openMin,
+  riskPct: null, rMultiple: null, source: "import",
+});
 
 /** แถวคลังจำลอง — ใส่เฉพาะช่องที่การทดสอบสนใจ */
 const rec = (o: Partial<ReactionRecord>): ReactionRecord => ({
@@ -301,6 +317,88 @@ export async function GET() {
   t("จัดรูปแบบบาท", fmtThb(1234.5), "฿1,234.50");
   t("จัดรูปแบบบาท: ใส่เครื่องหมายบวก", fmtThb(197.28, true), "+฿197.28");
   t("จัดรูปแบบบาท: ติดลบใช้ขีดหน้าสัญลักษณ์", fmtThb(-40.21, true), "-฿40.21");
+
+  // ---- พฤติกรรม: เข้าใหม่หลังแพ้ vs หลังชนะ ----
+  const seq = [
+    trade({ openMin: 0, closeMin: 10, profit: -100 }),   // แพ้
+    trade({ openMin: 15, closeMin: 20, profit: 50 }),    // เข้าใหม่หลังแพ้ 5 นาที
+    trade({ openMin: 80, closeMin: 90, profit: 60 }),    // เข้าใหม่หลังชนะ 60 นาที
+  ];
+  const re = reentryGaps(seq);
+  t("เข้าใหม่: ช่องว่างหลังแพ้", re.afterLoss, [5]);
+  t("เข้าใหม่: ช่องว่างหลังชนะ", re.afterWin, [60]);
+  t("เข้าใหม่: เร็วกว่ากี่เท่า", re.ratio, 12);
+  t("เข้าใหม่: ไม้แรกไม่มีไม้ก่อนหน้า จึงไม่ถูกนับ", re.afterLoss.length + re.afterWin.length, 2);
+  t("เข้าใหม่: เปิดคู่พร้อมกันนับช่องว่างครั้งเดียว",
+    reentryGaps([
+      trade({ openMin: 0, closeMin: 10, profit: -100 }),
+      trade({ openMin: 15, closeMin: 20, profit: 5, lots: 0.4 }),
+      trade({ openMin: 15, closeMin: 20, profit: 6, lots: 0.3 }),
+    ]).afterLoss, [5]);
+  t("เข้าใหม่: ไม้ที่เปิดขณะไม้เดิมยังค้าง ไม่นับเป็นการเข้าใหม่",
+    reentryGaps([
+      trade({ openMin: 0, closeMin: 100, profit: -10 }),
+      trade({ openMin: 50, closeMin: 60, profit: 5 }),
+    ]).afterLoss.length, 0);
+
+  // ---- ระยะเวลาถือ ----
+  const hs = holdSplit([
+    trade({ openMin: 0, closeMin: 10, profit: 50 }),
+    trade({ openMin: 20, closeMin: 50, profit: -50 }),
+  ]);
+  t("ถือ: มัธยฐานไม้กำไร", hs.winMedian, 10);
+  t("ถือ: มัธยฐานไม้ขาดทุน", hs.lossMedian, 30);
+  t("ถือ: ตัดกำไรเร็วกว่าทนขาดทุน", hs.cutsWinnersEarly, true);
+  t("ถือ: ไม่มีไม้ขาดทุน -> ไม่ตัดสิน",
+    holdSplit([trade({ openMin: 0, closeMin: 5, profit: 1 })]).cutsWinnersEarly, false);
+
+  // ---- ซ้อนไม้ ----
+  const ovPair = overlaps([
+    trade({ openMin: 0, closeMin: 30, profit: 10, side: "buy", lots: 0.4 }),
+    trade({ openMin: 0, closeMin: 30, profit: 10, side: "buy", lots: 0.4 }),
+  ]);
+  t("ซ้อนไม้: เปิดพร้อมกันรวมล็อต", ovPair.peakLots, 0.8);
+  t("ซ้อนไม้: นับเฉพาะไม้ที่มาทับ", ovPair.stacked, 1);
+  t("ซ้อนไม้: จังหวะละรายการเดียว", ovPair.moments.length, 1);
+  t("ซ้อนไม้: คนละทางไม่รวมกัน",
+    overlaps([
+      trade({ openMin: 0, closeMin: 30, profit: 1, side: "buy", lots: 0.4 }),
+      trade({ openMin: 0, closeMin: 30, profit: 1, side: "sell", lots: 0.4 }),
+    ]).peakLots, 0.4);
+  t("ซ้อนไม้: เข้าทีละไม้ไม่นับว่าซ้อน",
+    overlaps([
+      trade({ openMin: 0, closeMin: 10, profit: 1 }),
+      trade({ openMin: 20, closeMin: 30, profit: 1 }),
+    ]).stacked, 0);
+
+  // ---- กำไรกระจุก ----
+  const con = concentration([
+    trade({ openMin: 0, closeMin: 1, profit: 300 }),
+    trade({ openMin: 2, closeMin: 3, profit: 50 }),
+    trade({ openMin: 4, closeMin: 5, profit: -100 }),
+    trade({ openMin: 6, closeMin: 7, profit: -100 }),
+  ]);
+  t("กระจุก: กำไรสุทธิ", con.net, 150);
+  t("กระจุก: ตัดไม้ที่ดีสุด 1 ไม้", con.without[0].net, -150);
+  t("กระจุก: พลิกเป็นลบที่ไม้ที่ 1", con.flipsAt, 1);
+  t("กระจุก: กระจายดีไม่พลิก",
+    concentration([
+      trade({ openMin: 0, closeMin: 1, profit: 100 }),
+      trade({ openMin: 2, closeMin: 3, profit: 100 }),
+      trade({ openMin: 4, closeMin: 5, profit: 100 }),
+      trade({ openMin: 6, closeMin: 7, profit: 100 }),
+    ]).flipsAt, null);
+
+  // ---- รวม ----
+  t("พฤติกรรม: ไม่มีไม้ -> null", analyseBehaviour([]), null);
+  const beh = analyseBehaviour([
+    trade({ openMin: 0, closeMin: 30, profit: 10, lots: 0.4, sl: 4290 }),
+    trade({ openMin: 0, closeMin: 30, profit: -20, lots: 0.4 }),
+  ]);
+  t("พฤติกรรม: นับไม้ที่ตั้ง SL", beh?.withSl, 1);
+  // ถือรวม 0.8 ล็อต · ราคาสวน $20 -> 20 x 0.8 x 100 = 1600
+  t("พฤติกรรม: ขาดทุนถ้าราคาสวน $20", beh?.shockLoss, 1600);
+  t("พฤติกรรม: ไม้แย่สุด", beh?.worstLoss, -20);
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(
