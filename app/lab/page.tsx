@@ -1,4 +1,6 @@
+import ExpectancyPanel from "@/components/ExpectancyPanel";
 import { Banner, Panel } from "@/components/ui";
+import { expectancyData } from "@/lib/expectancy";
 import { isConfigured } from "@/lib/db";
 import { allRecords, MIN_SAMPLE, statsFor, summarize } from "@/lib/reactions";
 import { thShortDate } from "@/lib/time";
@@ -151,6 +153,13 @@ export default async function LabPage() {
             </p>
           </>
         )}
+      </Panel>
+
+      <Panel
+        title="กินได้จริงไหมหลังหักต้นทุน"
+        sub="% ความแม่นไม่ได้แปลว่ากำไร — ต้องรู้ว่าไม้ที่ถูกได้เท่าไหร่เทียบกับไม้ที่ผิดเสียเท่าไหร่ แล้วเหลืออะไรหลังสเปรด"
+      >
+        <ExpectancyPanel segments={expectancyData(records)} />
       </Panel>
 
       <Panel

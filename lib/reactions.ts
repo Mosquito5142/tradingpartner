@@ -37,7 +37,12 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 interface Measured {
   m5: number | null; m10: number | null; m15: number | null;
   m30: number | null; m60: number | null; rng60: number | null;
+  up15: number | null; dn15: number | null;
+  up60: number | null; dn60: number | null;
 }
+
+/** ช่วงเวลาที่เก็บระยะวิ่งสุดขีด — 15 คือช่วงที่มีขอบได้เปรียบ 60 ไว้ดูภาพกว้าง */
+export const EXCURSION_HORIZONS = [15, 60] as const;
 
 /** วัดการเคลื่อนไหวหลังข่าว เทียบกับ close ของแท่งก่อนข่าว */
 export function measure(eventTs: number, bars: Bar[]): Measured | null {
@@ -58,6 +63,19 @@ export function measure(eventTs: number, bars: Bar[]): Measured | null {
   out.rng60 = hour.length
     ? round2(Math.max(...hour.map((b) => b.h)) - Math.min(...hour.map((b) => b.l)))
     : null;
+
+  // ราคาวิ่งขึ้น/ลงไกลสุดเท่าไหร่ เทียบราคาอ้างอิงเดียวกับข้างบน
+  // ยังไม่แปลงเป็น MFE/MAE ที่นี่ เพราะทิศที่ทฤษฎีชี้อาจเปลี่ยนได้ถ้าแก้กฎใน bias.ts
+  // เก็บดิบไว้แล้วตีความตอนอ่าน ข้อมูลเก่าจะได้ไม่เสียเปล่า
+  for (const horizon of EXCURSION_HORIZONS) {
+    const window = bars.filter((b) => b.ts >= eventTs && b.ts < eventTs + horizon * 60);
+    out[`up${horizon}`] = window.length
+      ? Math.max(0, round2(Math.max(...window.map((b) => b.h)) - reference.c))
+      : null;
+    out[`dn${horizon}`] = window.length
+      ? Math.max(0, round2(reference.c - Math.min(...window.map((b) => b.l))))
+      : null;
+  }
 
   const measured = out as unknown as Measured;
   return HORIZONS.some((h) => measured[`m${h}` as keyof Measured] !== null) ? measured : null;
@@ -133,7 +151,10 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
     });
   }
   if (!rows.length && !meta.length) {
-    return { added: 0, measured: 0, total: await count(), withSurprise: await countSurprise() };
+    return {
+      added: 0, measured: 0, total: await count(),
+      withSurprise: await countSurprise(), withExcursion: await countExcursion(),
+    };
   }
 
   const before = await count();
@@ -142,12 +163,14 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
   const statements = rows.flatMap((r) => [
     {
       sql: `INSERT INTO reactions (id, ts, key, title, country, importance, surprise, pred,
-              m5, m10, m15, m30, m60, rng60, actual_raw, forecast_raw, surprise_pct)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              m5, m10, m15, m30, m60, rng60, actual_raw, forecast_raw, surprise_pct,
+              up15, dn15, up60, dn60)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO NOTHING`,
       args: [r.id, r.ts, r.key, r.title, r.country, r.importance, r.surprise, r.pred,
              r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60,
-             r.actualRaw, r.forecastRaw, r.surprisePct],
+             r.actualRaw, r.forecastRaw, r.surprisePct,
+             r.up15, r.dn15, r.up60, r.dn60],
     },
     {
       // เติมช่องที่ยังว่างของแถวเดิม — รอบนี้รวมคอลัมน์ขนาด surprise ที่เพิ่งเพิ่มเข้ามา
@@ -156,10 +179,13 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
               m5 = COALESCE(m5, ?), m10 = COALESCE(m10, ?), m15 = COALESCE(m15, ?),
               m30 = COALESCE(m30, ?), m60 = COALESCE(m60, ?), rng60 = COALESCE(rng60, ?),
               actual_raw = COALESCE(actual_raw, ?), forecast_raw = COALESCE(forecast_raw, ?),
-              surprise_pct = COALESCE(surprise_pct, ?)
+              surprise_pct = COALESCE(surprise_pct, ?),
+              up15 = COALESCE(up15, ?), dn15 = COALESCE(dn15, ?),
+              up60 = COALESCE(up60, ?), dn60 = COALESCE(dn60, ?)
             WHERE id = ?`,
       args: [r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60,
-             r.actualRaw, r.forecastRaw, r.surprisePct, r.id],
+             r.actualRaw, r.forecastRaw, r.surprisePct,
+             r.up15, r.dn15, r.up60, r.dn60, r.id],
     },
   ]);
 
@@ -189,6 +215,7 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
     measured: rows.length,
     total: after,
     withSurprise: await countSurprise(),
+    withExcursion: await countExcursion(),
   };
 }
 
@@ -204,6 +231,19 @@ async function countSurprise(): Promise<number> {
   const db = getDb();
   if (!db) return 0;
   const res = await db.execute("SELECT COUNT(*) AS n FROM reactions WHERE surprise_pct IS NOT NULL");
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/**
+ * กี่แถวที่มีระยะวิ่งสุดขีดแล้ว
+ *
+ * ต่างจาก surprise ตรงที่อันนี้ต้องใช้ราคา จึงเติมย้อนหลังได้เฉพาะแถวที่ยังอยู่ใน
+ * หน้าต่าง 60 วันของ Yahoo — แถวที่หลุดไปแล้วจะเป็น null ตลอดไป
+ */
+async function countExcursion(): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+  const res = await db.execute("SELECT COUNT(*) AS n FROM reactions WHERE up15 IS NOT NULL");
   return Number(res.rows[0]?.n ?? 0);
 }
 
@@ -223,6 +263,8 @@ function toRecord(row: Record<string, unknown>): ReactionRecord {
     actualRaw: num(row.actual_raw),
     forecastRaw: num(row.forecast_raw),
     surprisePct: num(row.surprise_pct),
+    up15: num(row.up15), dn15: num(row.dn15),
+    up60: num(row.up60), dn60: num(row.dn60),
   };
 }
 
@@ -246,7 +288,7 @@ function hit(record: ReactionRecord, horizon: number): boolean | null {
   return move > 0 === (record.pred === "up");
 }
 
-function median(values: number[]): number | null {
+export function median(values: number[]): number | null {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);

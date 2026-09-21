@@ -1,6 +1,11 @@
 import { phaseOf, pollFor, pickFocus, worthWatching, IMMINENT_MIN, WATCH_AFTER_MIN } from "@/lib/live";
 import { EDGE_WINDOW_MIN } from "@/lib/briefing";
 import { atr14, ema, readRegime } from "@/lib/regime";
+import { measure, MIN_SAMPLE } from "@/lib/reactions";
+import {
+  adverseExcursions, expectancy, favorableExcursions, percentile, signedOutcomes, stopOutRates,
+} from "@/lib/expectancy";
+import type { ReactionRecord } from "@/lib/types";
 import { fetchGcf } from "@/lib/price";
 import { buildLevels } from "@/lib/levels";
 import { alertsFor, alreadySent, formatCard, isDue, LEAD_MIN, MIN_LEAD_MIN } from "@/lib/notify";
@@ -19,6 +24,16 @@ const card = (over: Partial<BriefingCard> = {}): BriefingCard => ({
 });
 
 const bar = (c: number, h = c + 0.5, l = c - 0.5): Bar => ({ ts: 0, o: c, h, l, c });
+
+/** แถวคลังจำลอง — ใส่เฉพาะช่องที่การทดสอบสนใจ */
+const rec = (o: Partial<ReactionRecord>): ReactionRecord => ({
+  id: "x", ts: 0, key: "k", title: "t", country: "US", importance: 1,
+  surprise: "higher", pred: "up",
+  m5: null, m10: null, m15: null, m30: null, m60: null, rng60: null,
+  actualRaw: null, forecastRaw: null, surprisePct: null,
+  up15: null, dn15: null, up60: null, dn60: null,
+  ...o,
+});
 const level = (price: number): Level => ({
   price, kind: "swing", label: "ทดสอบ", touches: 2, strength: 2,
   side: "support", distance: 0,
@@ -210,6 +225,58 @@ export async function GET() {
     }
     t("กันซ้ำ: ลบข้อมูลทดสอบออกแล้ว", (await alreadySent([id])).has(id), false);
   }
+
+  // ---- measure() เก็บระยะวิ่งสุดขีด ----
+  // แท่งอ้างอิงปิด 100 · หลังข่าวแกว่ง 96-104 -> ขึ้นไกลสุด 4 ลงไกลสุด 4
+  const mBars: Bar[] = [
+    { ts: 0, o: 100, h: 100, l: 100, c: 100 },
+    { ts: 300, o: 100, h: 104, l: 99, c: 103 },
+    { ts: 600, o: 103, h: 103, l: 96, c: 97 },
+  ];
+  const m = measure(300, mBars);
+  t("measure: ขึ้นไกลสุด 15 นาที", m?.up15, 4);
+  t("measure: ลงไกลสุด 15 นาที", m?.dn15, 4);
+  t("measure: ไม่ติดลบเมื่อราคาไปทางเดียว",
+    (measure(300, [
+      { ts: 0, o: 100, h: 100, l: 100, c: 100 },
+      { ts: 300, o: 101, h: 105, l: 101, c: 104 },
+    ])?.dn15 ?? -1) >= 0, true);
+
+  // ---- signedOutcomes ----
+  t("signed: pred=up ใช้ค่าตามจริง", signedOutcomes([rec({ m15: 8 })], 15), [8]);
+  t("signed: pred=down กลับข้าง", signedOutcomes([rec({ pred: "down", m15: 8 })], 15), [-8]);
+  t("signed: ข้ามแถวที่ทฤษฎีไม่ชี้ทิศ",
+    signedOutcomes([rec({ pred: "neutral", m15: 8 }), rec({ pred: "", m15: 5 })], 15), []);
+  t("signed: ข้ามแถวที่ไม่มีค่า", signedOutcomes([rec({ m15: null })], 15), []);
+
+  // ---- expectancy (คำนวณมือได้) ----
+  // [10,-5,3] ต้นทุน 1 -> สุทธิ [9,-6,2] เฉลี่ย 5/3 = 1.67 มัธยฐาน 2 ชนะ 2/3 = 67%
+  const ex = expectancy([10, -5, 3], 1);
+  t("expectancy: ค่าเฉลี่ยหลังหักต้นทุน", ex.mean, 1.67);
+  t("expectancy: มัธยฐาน", ex.median, 2);
+  t("expectancy: อัตราชนะ", ex.winRate, 67);
+  t("expectancy: ต้นทุนคุ้มทุน = เฉลี่ยก่อนหัก", ex.breakEvenCost, 2.67);
+  t("expectancy: หักด้วยต้นทุนคุ้มทุนแล้วเหลือศูนย์",
+    Math.abs(expectancy([10, -5, 3], 2.666666666666667).mean) < 0.01, true);
+  t("expectancy: ต้นทุนเลื่อนค่าเฉลี่ยลงตรง ๆ",
+    Math.round((expectancy([10, -5, 3], 0).mean - ex.mean) * 100) / 100, 1);
+  t("expectancy: SD ไม่เปลี่ยนตามต้นทุน", expectancy([10, -5, 3], 0).sd, ex.sd);
+  t("expectancy: ไม่มีข้อมูล -> ไม่พัง", expectancy([], 1).n, 0);
+  t(`expectancy: n < ${MIN_SAMPLE} ห้ามสรุป`, expectancy([10, 20], 0).enough, false);
+  t("expectancy: ขอบล่างติดลบ -> ไม่ขึ้นเขียว", expectancy([10, -5, 3], 0).positive, false);
+  t("expectancy: ชนะทุกไม้ใกล้เคียงกัน -> ขึ้นเขียว",
+    expectancy([5, 5.2, 4.8, 5.1, 4.9], 0).positive, true);
+
+  // ---- MFE / MAE ----
+  t("MAE: pred=up คือฝั่งที่ราคาลง", adverseExcursions([rec({ up15: 7, dn15: 3 })], 15), [3]);
+  t("MAE: pred=down คือฝั่งที่ราคาขึ้น",
+    adverseExcursions([rec({ pred: "down", up15: 7, dn15: 3 })], 15), [7]);
+  t("MFE: pred=up คือฝั่งที่ราคาขึ้น", favorableExcursions([rec({ up15: 7, dn15: 3 })], 15), [7]);
+  t("percentile: กลางชุด", percentile([1, 2, 3, 4, 5], 0.5), 3);
+  t("stopOut: MAE เท่าระยะ SL พอดีนับว่าโดนชน",
+    stopOutRates([rec({ dn15: 5 })], 15, [5])[0].hitPct, 100);
+  t("stopOut: MAE ต่ำกว่าระยะ SL ไม่นับ",
+    stopOutRates([rec({ dn15: 4.99 })], 15, [5])[0].hitPct, 0);
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(

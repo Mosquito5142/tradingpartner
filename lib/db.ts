@@ -113,6 +113,13 @@ const MIGRATIONS = [
   "ALTER TABLE reactions ADD COLUMN actual_raw REAL",
   "ALTER TABLE reactions ADD COLUMN forecast_raw REAL",
   "ALTER TABLE reactions ADD COLUMN surprise_pct REAL",
+  // ระยะที่ราคาวิ่งขึ้น/ลงไกลสุดหลังข่าว เทียบราคาก่อนประกาศ (ไม่ติดลบทั้งคู่)
+  // เก็บแบบไม่ผูกทิศทาง แล้วค่อยแปลงเป็น MFE/MAE ตอนอ่านตามทิศที่ทฤษฎีชี้
+  // ถ้าวันหลังแก้กฎใน bias.ts ข้อมูลเก่าจะยังใช้ได้ต่อ
+  "ALTER TABLE reactions ADD COLUMN up15 REAL",
+  "ALTER TABLE reactions ADD COLUMN dn15 REAL",
+  "ALTER TABLE reactions ADD COLUMN up60 REAL",
+  "ALTER TABLE reactions ADD COLUMN dn60 REAL",
 ];
 
 /** สร้างตาราง/คอลัมน์ถ้ายังไม่มี — เรียกซ้ำได้ ทำจริงครั้งเดียวต่อ process */

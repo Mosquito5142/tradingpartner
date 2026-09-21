@@ -110,6 +110,14 @@ export interface ReactionRecord {
   forecastRaw: number | null;
   /** พลาดเป้ากี่ % ของค่าคาดการณ์ (ค่าสัมบูรณ์) — null เมื่อคาดการณ์ใกล้ศูนย์จนหารไม่ได้ */
   surprisePct: number | null;
+  /**
+   * ราคาวิ่งขึ้น/ลงไกลสุดเท่าไหร่หลังข่าว เทียบราคาปิดก่อนประกาศ (ไม่ติดลบ)
+   * ยังไม่ผูกกับทิศทาง — แปลงเป็น MFE/MAE ตอนอ่านด้วย pred ใน lib/expectancy.ts
+   */
+  up15: number | null;
+  dn15: number | null;
+  up60: number | null;
+  dn60: number | null;
 }
 
 export interface DecayPoint {
