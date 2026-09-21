@@ -111,6 +111,49 @@ export default async function LabPage() {
       </Panel>
 
       <Panel
+        title="แยกตามขนาดที่พลาดเป้า"
+        sub={
+          <>
+            เฉพาะข่าวใหญ่สหรัฐฯ · แบ่งที่มัธยฐานของกลุ่มเอง
+            {lab.surprise.threshold !== null && <> (เกณฑ์ {lab.surprise.threshold}% ของค่าคาดการณ์)</>} ·
+            มีตัวเลขให้คำนวณ {lab.surprise.covered} จาก {lab.surprise.total} รายการ
+          </>
+        }
+      >
+        {lab.surprise.segments.length === 0 ? (
+          <p className="text-[13px] leading-relaxed text-faint">
+            ยังแบ่งไม่ได้ — ต้องมีข่าวใหญ่สหรัฐฯ ที่เก็บตัวเลขคาดการณ์/ผลจริงไว้อย่างน้อย{" "}
+            {MIN_SAMPLE * 2} รายการ (ตอนนี้ {lab.surprise.covered})
+            {lab.surprise.covered < lab.surprise.total && (
+              <>
+                {" "}· แถวเก่ายังไม่มีตัวเลขดิบ เรียก{" "}
+                <code className="text-[#c7cdd8]">/api/collect?backfill=1</code> เพื่อเติมย้อนหลัง
+              </>
+            )}
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-4 md:grid-cols-2">
+              {lab.surprise.segments.map((seg) => (
+                <div key={seg.label} className="rounded-lg border border-line bg-card p-3">
+                  <h3 className="mb-2 text-[14px] font-semibold">
+                    {seg.label} <span className="text-[11.5px] font-normal text-faint">n={seg.n}</span>
+                  </h3>
+                  <CurveTable curve={seg.curve} />
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 rounded-md border border-[#3a3020] bg-[#221d12] px-3 py-2 text-[12.5px] leading-relaxed text-[#c0a060]">
+              <b>อ่านด้วยความระวัง:</b> ขนาด surprise คิดเป็น % ของค่าคาดการณ์
+              ซึ่งข่าวคนละหน่วยเทียบกันไม่ได้สนิท (ค่าคาดการณ์ที่ใกล้ศูนย์จะทำให้ % พองผิดส่วน) ·
+              n ต่อกลุ่มยังน้อย ต่างกันไม่กี่เปอร์เซ็นต์ยังอยู่ในช่วงความคลาดเคลื่อน —
+              ให้ดูว่าทิศทางของผลคงเส้นคงวาไหมเมื่อ n โตขึ้น มากกว่าจะยึดตัวเลขวันนี้
+            </p>
+          </>
+        )}
+      </Panel>
+
+      <Panel
         title="สถิติรายข่าว"
         sub={`แสดงเฉพาะข่าวที่เก็บได้ตั้งแต่ ${MIN_SAMPLE} ครั้งขึ้นไป — น้อยกว่านั้นตัวเลขยังไม่มีความหมาย`}
       >

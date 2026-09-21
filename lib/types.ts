@@ -105,6 +105,11 @@ export interface ReactionRecord {
   m30: number | null;
   m60: number | null;
   rng60: number | null;
+  /** ตัวเลขดิบ ณ ตอนเก็บ — เก็บไว้เพื่อคำนวณขนาด surprise ย้อนหลังได้โดยไม่ต้องพึ่งปฏิทิน */
+  actualRaw: number | null;
+  forecastRaw: number | null;
+  /** พลาดเป้ากี่ % ของค่าคาดการณ์ (ค่าสัมบูรณ์) — null เมื่อคาดการณ์ใกล้ศูนย์จนหารไม่ได้ */
+  surprisePct: number | null;
 }
 
 export interface DecayPoint {

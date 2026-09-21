@@ -64,6 +64,23 @@ export function measure(eventTs: number, bars: Bar[]): Measured | null {
 }
 
 /**
+ * พลาดเป้าไปกี่ % ของค่าคาดการณ์
+ *
+ * ใช้ค่าสัมพัทธ์เพราะข่าวคนละตัวมีหน่วยคนละแบบ (NFP เป็นแสนคน, CPI เป็นทศนิยม)
+ * เทียบกันตรง ๆ ไม่ได้ แต่ก็มีข้อจำกัดที่ต้องบอกผู้ใช้: คาดการณ์ที่ใกล้ศูนย์
+ * จะทำให้ % พองผิดส่วน (CPI 0.3 เทียบ 0.2 = พลาด 50%) จึงตัดทิ้งเมื่อหารไม่ได้จริง
+ */
+export function surpriseMagnitude(
+  event: Pick<CalendarEvent, "actualRaw" | "forecastRaw">,
+): number | null {
+  const { actualRaw: a, forecastRaw: f } = event;
+  if (typeof a !== "number" || typeof f !== "number") return null;
+  if (!Number.isFinite(a) || !Number.isFinite(f)) return null;
+  if (Math.abs(f) < 1e-9) return null;
+  return Math.round((Math.abs(a - f) / Math.abs(f)) * 10000) / 100;
+}
+
+/**
  * วัดข่าวที่ยังไม่เคยเก็บแล้วบันทึกลงคลัง
  *
  * ของเดิมจะไม่ถูกทับ (ใช้ INSERT ... ON CONFLICT DO NOTHING) เพราะเมื่อข้อมูลราคา
@@ -76,12 +93,26 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
   await ensureSchema();
 
   const rows: (ReactionRecord & Measured)[] = [];
+  /**
+   * ตัวเลขดิบ/ขนาด surprise มาจากปฏิทินล้วน ๆ ไม่ต้องใช้ราคาเลย
+   * จึงต้องเก็บแยกจาก rows — ไม่งั้นแถวที่เก่ากว่าหน้าต่างราคา 60 วันของ Yahoo
+   * จะถูกข้ามทั้งแถวและไม่มีวันได้ค่าย้อนหลัง
+   */
+  const meta: { id: string; actualRaw: number | null; forecastRaw: number | null; surprisePct: number | null }[] = [];
+
   for (const event of events) {
     const bias = annotate(event);
     // เก็บเฉพาะข่าวตัวเลขที่มี surprise ชัด — ข่าวแถลง (tone) วัดทิศทางแบบนี้ไม่ได้
     if (bias.kind !== "number") continue;
     if (bias.surprise !== "higher" && bias.surprise !== "lower") continue;
     if (isNoise(event) || event.importance < 0) continue;
+
+    meta.push({
+      id: event.id,
+      actualRaw: event.actualRaw,
+      forecastRaw: event.forecastRaw,
+      surprisePct: surpriseMagnitude(event),
+    });
 
     const measured = measure(event.ts, bars);
     if (!measured) continue;
@@ -95,30 +126,54 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
       importance: event.importance,
       surprise: bias.surprise,
       pred: bias.outcome,
+      actualRaw: event.actualRaw,
+      forecastRaw: event.forecastRaw,
+      surprisePct: surpriseMagnitude(event),
       ...measured,
     });
   }
-  if (!rows.length) return { added: 0, measured: 0, total: await count() };
+  if (!rows.length && !meta.length) {
+    return { added: 0, measured: 0, total: await count(), withSurprise: await countSurprise() };
+  }
 
   const before = await count();
 
   // INSERT ก่อน (ของใหม่) แล้วค่อย UPDATE เติมช่องว่างของแถวเดิม
   const statements = rows.flatMap((r) => [
     {
-      sql: `INSERT INTO reactions (id, ts, key, title, country, importance, surprise, pred, m5, m10, m15, m30, m60, rng60)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO reactions (id, ts, key, title, country, importance, surprise, pred,
+              m5, m10, m15, m30, m60, rng60, actual_raw, forecast_raw, surprise_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO NOTHING`,
       args: [r.id, r.ts, r.key, r.title, r.country, r.importance, r.surprise, r.pred,
-             r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60],
+             r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60,
+             r.actualRaw, r.forecastRaw, r.surprisePct],
     },
     {
+      // เติมช่องที่ยังว่างของแถวเดิม — รอบนี้รวมคอลัมน์ขนาด surprise ที่เพิ่งเพิ่มเข้ามา
+      // แถวเก่าทั้งหมดจึงได้ค่าย้อนหลังจากการเรียก /api/collect?backfill=1 ครั้งเดียว
       sql: `UPDATE reactions SET
               m5 = COALESCE(m5, ?), m10 = COALESCE(m10, ?), m15 = COALESCE(m15, ?),
-              m30 = COALESCE(m30, ?), m60 = COALESCE(m60, ?), rng60 = COALESCE(rng60, ?)
+              m30 = COALESCE(m30, ?), m60 = COALESCE(m60, ?), rng60 = COALESCE(rng60, ?),
+              actual_raw = COALESCE(actual_raw, ?), forecast_raw = COALESCE(forecast_raw, ?),
+              surprise_pct = COALESCE(surprise_pct, ?)
             WHERE id = ?`,
-      args: [r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60, r.id],
+      args: [r.m5, r.m10, r.m15, r.m30, r.m60, r.rng60,
+             r.actualRaw, r.forecastRaw, r.surprisePct, r.id],
     },
   ]);
+
+  // เติมตัวเลขดิบให้แถวที่มีอยู่แล้ว ทำแยกจากข้างบนเพราะไม่ผูกกับว่าวัดราคาได้ไหม
+  // (COALESCE ทำให้เรียกซ้ำกี่รอบก็ไม่ทับค่าที่มีอยู่)
+  statements.push(
+    ...meta.map((m) => ({
+      sql: `UPDATE reactions SET
+              actual_raw = COALESCE(actual_raw, ?), forecast_raw = COALESCE(forecast_raw, ?),
+              surprise_pct = COALESCE(surprise_pct, ?)
+            WHERE id = ?`,
+      args: [m.actualRaw, m.forecastRaw, m.surprisePct, m.id],
+    })),
+  );
 
   // แบ่งเป็นก้อนกันคำสั่งยาวเกินขีดจำกัดของ libSQL
   const CHUNK = 200;
@@ -129,13 +184,26 @@ export async function updateStore(events: CalendarEvent[], bars: Bar[]) {
   const after = await count();
   // "measured" = จำนวนข่าวที่วัดได้ในรอบนี้ (ส่วนใหญ่มีอยู่แล้ว)
   // ไม่รายงานว่า "เติม" กี่แถว เพราะ COALESCE ไม่บอกว่าแถวไหนเปลี่ยนจริง
-  return { added: after - before, measured: rows.length, total: after };
+  return {
+    added: after - before,
+    measured: rows.length,
+    total: after,
+    withSurprise: await countSurprise(),
+  };
 }
 
 async function count(): Promise<number> {
   const db = getDb();
   if (!db) return 0;
   const res = await db.execute("SELECT COUNT(*) AS n FROM reactions");
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/** กี่แถวที่มีขนาด surprise แล้ว — ใช้ตรวจว่า backfill เดินครบจริงไหม */
+async function countSurprise(): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+  const res = await db.execute("SELECT COUNT(*) AS n FROM reactions WHERE surprise_pct IS NOT NULL");
   return Number(res.rows[0]?.n ?? 0);
 }
 
@@ -152,6 +220,9 @@ function toRecord(row: Record<string, unknown>): ReactionRecord {
     pred: String(row.pred) as ReactionRecord["pred"],
     m5: num(row.m5), m10: num(row.m10), m15: num(row.m15),
     m30: num(row.m30), m60: num(row.m60), rng60: num(row.rng60),
+    actualRaw: num(row.actual_raw),
+    forecastRaw: num(row.forecast_raw),
+    surprisePct: num(row.surprise_pct),
   };
 }
 
@@ -241,6 +312,47 @@ export function breakdown(records: ReactionRecord[]): Segment[] {
     .filter((s) => s.n > 0);
 }
 
+export interface SurpriseSplit {
+  /** เกณฑ์แบ่ง = มัธยฐานของขนาด surprise ในกลุ่มที่ใช้ */
+  threshold: number | null;
+  /** กี่แถวที่มีขนาด surprise ให้ใช้ (เทียบกับ total จะรู้ว่า backfill ครบหรือยัง) */
+  covered: number;
+  total: number;
+  segments: Segment[];
+}
+
+/**
+ * แยกตามขนาด surprise — ข่าวที่พลาดเป้ามากทำให้ทองวิ่งแรงและตรงทางกว่าไหม
+ *
+ * ใช้เฉพาะข่าวใหญ่สหรัฐฯ เพราะเป็นกลุ่มเดียวที่มีขอบได้เปรียบให้วัด
+ * และแบ่งที่มัธยฐานของกลุ่มเอง ไม่ใช่เลขตายตัว จะได้ไม่ต้องเดาว่า "มาก" คือเท่าไหร่
+ *
+ * ข้อจำกัดที่ต้องบอกเสมอ: % เทียบคาดการณ์ของข่าวคนละหน่วยเทียบกันไม่ได้สนิท
+ * และตอนวัดครั้งแรกได้ n แค่ 17 ต่อกลุ่ม ซึ่งยังสรุปไม่ได้
+ */
+export function surpriseSplit(records: ReactionRecord[]): SurpriseSplit {
+  const pool = records.filter((r) => r.country === "US" && r.importance === 1);
+  const withPct = pool.filter((r) => r.surprisePct !== null);
+  const threshold = median(withPct.map((r) => r.surprisePct as number));
+
+  // ต้องมีพอให้ทั้งสองฝั่งถึงเกณฑ์ขั้นต่ำ ไม่งั้นโชว์ % ไปก็หลอกตัวเอง
+  if (threshold === null || withPct.length < MIN_SAMPLE * 2) {
+    return { threshold, covered: withPct.length, total: pool.length, segments: [] };
+  }
+
+  const large = withPct.filter((r) => (r.surprisePct as number) > threshold);
+  const small = withPct.filter((r) => (r.surprisePct as number) <= threshold);
+  return {
+    threshold,
+    covered: withPct.length,
+    total: pool.length,
+    segments: [
+      { label: `พลาดเป้ามาก (เกิน ${threshold}%)`, n: large.length, curve: decayCurve(large) },
+      { label: `พลาดเป้าน้อย (ไม่เกิน ${threshold}%)`, n: small.length, curve: decayCurve(small) },
+    ].filter((seg) => seg.n >= MIN_SAMPLE),
+  };
+}
+
 /**
  * ระยะที่ทองขยับปกติ "ช่วงข่าวใหญ่สหรัฐฯ" — ใช้เทียบว่า SL กว้างพอไหม
  *
@@ -266,6 +378,7 @@ export interface LabSummary {
   curve: DecayPoint[];
   breakdown: Segment[];
   groups: { key: string; n: number }[];
+  surprise: SurpriseSplit;
   noise15: number | null;
   configured: boolean;
 }
@@ -280,6 +393,7 @@ export function summarize(records: ReactionRecord[], configured: boolean): LabSu
     curve: decayCurve(records),
     breakdown: breakdown(records),
     groups: [...counts.entries()].map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n),
+    surprise: surpriseSplit(records),
     noise15: newsNoise(records, 15),
     configured,
   };
