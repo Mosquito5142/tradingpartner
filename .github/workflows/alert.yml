@@ -1,0 +1,40 @@
+# ตัวตั้งเวลาเรียก /api/cron/alert — ทางเลือกสำหรับคนที่ไม่อยากใช้บริการภายนอก
+#
+# ทำไมต้องมี: Vercel แผนฟรีรัน cron ได้วันละครั้ง ซึ่งไม่พอกับหน้าต่างเตือน 30 นาที
+#
+# ข้อจำกัดที่ต้องรู้ก่อนใช้: cron ของ GitHub Actions เป็น best-effort
+# ช่วงที่คนใช้เยอะอาจดีเลย์ 10-20 นาที ทำให้พลาดหน้าต่าง 5-30 นาทีได้
+# ถ้าอยากให้ตรงเวลาจริง ๆ ใช้ cron-job.org (ฟรี ยิงได้ทุกนาที) จะเชื่อถือได้กว่า
+#
+# ตั้งค่า: Settings > Secrets and variables > Actions
+#   ALERT_URL     = https://<โดเมนของคุณ>/api/cron/alert
+#   CRON_SECRET   = ค่าเดียวกับที่ตั้งใน Vercel (เว้นว่างได้ถ้าไม่ได้ตั้ง)
+
+name: แจ้งเตือนข่าวทอง
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: เรียก endpoint แจ้งเตือน
+        env:
+          ALERT_URL: ${{ secrets.ALERT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$ALERT_URL" ]; then
+            echo "ยังไม่ได้ตั้ง secret ALERT_URL — ข้าม"
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" "$ALERT_URL")
+          cat /tmp/out.json
+          echo
+          # 503 = ยังไม่ได้ตั้งค่า Telegram ซึ่งไม่ใช่ความผิดพลาดของ workflow
+          if [ "$code" = "200" ] || [ "$code" = "503" ]; then exit 0; fi
+          echo "เรียกไม่สำเร็จ (HTTP $code)"
+          exit 1

@@ -3,7 +3,20 @@ import { EDGE_WINDOW_MIN } from "@/lib/briefing";
 import { atr14, ema, readRegime } from "@/lib/regime";
 import { fetchGcf } from "@/lib/price";
 import { buildLevels } from "@/lib/levels";
+import { alertsFor, alreadySent, formatCard, isDue, LEAD_MIN, MIN_LEAD_MIN } from "@/lib/notify";
+import { getDb, isConfigured } from "@/lib/db";
 import type { AnnotatedEvent, Bar, Level } from "@/lib/types";
+import type { BriefingCard } from "@/lib/briefing";
+
+const card = (over: Partial<BriefingCard> = {}): BriefingCard => ({
+  ts: 0, when: "21/09/2026 19:30", title: "การจ้างงานนอกภาคเกษตร", titleEn: "Non-Farm Payrolls",
+  country: "US", importance: 1, volatile: true, kind: "number",
+  forecast: "225K", previous: "218K", actual: "", surprise: "", outcome: "",
+  theory: { dirIfHigher: "down", why: "จ้างงานดีเกินคาด → เฟดไม่ต้องรีบลดดอกเบี้ย → ทองลง" },
+  edgeWindowMin: 15,
+  history: { key: "NFP", n: 12, enough: true, accuracy15: 71, medianMove15: 8.9, medianRange60: 21.4, recent: [] },
+  ...over,
+});
 
 const bar = (c: number, h = c + 0.5, l = c - 0.5): Bar => ({ ts: 0, o: c, h, l, c });
 const level = (price: number): Level => ({
@@ -132,6 +145,70 @@ export async function GET() {
     t("GC=F จริง: ความเร็วตรง", r?.speed, Math.round(sp * 100) / 100);
   } catch (err) {
     out.push(["ข้ามการเทียบกับ GC=F (ดึงข้อมูลไม่ได้)", true, String(err)]);
+  }
+
+  // ---- หน้าต่างแจ้งเตือน ----
+  t(`due: ${LEAD_MIN} นาทีพอดี`, isDue(N + LEAD_MIN * 60, N), true);
+  t("due: ไกลเกินหน้าต่าง", isDue(N + (LEAD_MIN + 1) * 60, N), false);
+  t(`due: ${MIN_LEAD_MIN} นาที (ขอบล่าง)`, isDue(N + MIN_LEAD_MIN * 60, N), true);
+  t("due: สายเกินไปแล้ว", isDue(N + (MIN_LEAD_MIN - 1) * 60, N), false);
+  t("due: ประกาศไปแล้ว", isDue(N - 60, N), false);
+
+  // ---- ข้อความแจ้งเตือน ----
+  const msg = formatCard(card(), 30);
+  t("ข้อความ: บอกว่าเหลือกี่นาที", msg.includes("อีก 30 นาที"), true);
+  t("ข้อความ: มีคาดการณ์/ครั้งก่อน", msg.includes("225K") && msg.includes("218K"), true);
+  t("ข้อความ: ทิศทางตามทฤษฎีกลับข้างถูก",
+    msg.includes("สูงกว่าคาด → ▼ ทองลง") && msg.includes("ต่ำกว่าคาด → ▲ ทองขึ้น"), true);
+  t("ข้อความ: มีสถิติพร้อม n", msg.includes("71%") && msg.includes("n=12"), true);
+  t("ข้อความ: เตือนเรื่องอายุขอบได้เปรียบ", msg.includes("15 นาทีแรกเท่านั้น"), true);
+  t("ข้อความ: เตือนว่าไม่ใช่คำแนะนำการลงทุน", msg.includes("ไม่ใช่คำแนะนำการลงทุน"), true);
+
+  const thin = formatCard(card({ history: { key: "x", n: 1, enough: false, accuracy15: null, medianMove15: null, medianRange60: null, recent: [] } }), 12);
+  t("ข้อความ: n น้อยห้ามโชว์ %", thin.includes("ยังน้อยเกินสรุป") && !thin.includes("ทฤษฎีถูก"), true);
+
+  const tone = formatCard(card({ kind: "tone", history: { key: "y", n: 0, enough: false, toneEvent: true, accuracy15: null, medianMove15: null, medianRange60: null, recent: [] } }), 30);
+  t("ข้อความ: ข่าวแถลงบอกว่าวัดไม่ได้", tone.includes("วัดความแม่นแบบนี้ไม่ได้"), true);
+
+  t("ข้อความ: หนี HTML ในชื่อข่าว",
+    formatCard(card({ title: "<b>ทดสอบ</b> & ข่าว" }), 30).includes("&lt;b&gt;ทดสอบ&lt;/b&gt; &amp; ข่าว"), true);
+
+  // ---- คัดข่าวที่จะเตือน (ข้อมูลจำลอง เพราะปฏิทินจริงอาจไม่มีข่าวใหญ่พอดี) ----
+  const nev = (id: string, mins: number, o: Parameters<typeof ev>[2]) => ev(id, N + mins * 60, o);
+  const picked = alertsFor(
+    [
+      nev("big", 20, { importance: 1 }),
+      nev("vol", 25, { volatile: true }),
+      nev("key", 28, { key: true }),
+      nev("small", 20, {}),
+      nev("tooFar", 90, { importance: 1 }),
+      nev("tooLate", 2, { importance: 1 }),
+      nev("past", -10, { importance: 1 }),
+    ],
+    [],
+    N,
+  );
+  t("เตือน: เอาเฉพาะข่าวที่เข้าเกณฑ์และอยู่ในหน้าต่าง",
+    picked.map((p) => p.eventId).sort(), ["big", "key", "vol"]);
+  t("เตือน: id กันซ้ำผูกกับ event", picked.find((p) => p.eventId === "big")?.id, "big:pre");
+  t("เตือน: นับนาทีที่เหลือถูก", picked.find((p) => p.eventId === "vol")?.minutesLeft, 25);
+  t("เตือน: ไม่มีข่าวเข้าเกณฑ์ -> ว่าง", alertsFor([nev("small", 20, {})], [], N).length, 0);
+
+  // ---- กันส่งซ้ำ (แตะฐานข้อมูลจริง แล้วลบทิ้ง) ----
+  const db = getDb();
+  if (isConfigured() && db) {
+    const id = `tcheck-${Date.now()}:pre`;
+    try {
+      t("กันซ้ำ: ยังไม่เคยส่ง", (await alreadySent([id])).has(id), false);
+      await db.execute({
+        sql: "INSERT INTO alerts_sent (id, event_id, kind, event_ts) VALUES (?,?,?,?)",
+        args: [id, "tcheck", "pre", 0],
+      });
+      t("กันซ้ำ: ส่งแล้วต้องเจอ", (await alreadySent([id])).has(id), true);
+    } finally {
+      await db.execute({ sql: "DELETE FROM alerts_sent WHERE id = ?", args: [id] });
+    }
+    t("กันซ้ำ: ลบข้อมูลทดสอบออกแล้ว", (await alreadySent([id])).has(id), false);
   }
 
   const pass = out.filter((r) => r[1]).length;

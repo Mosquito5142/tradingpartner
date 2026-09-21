@@ -81,12 +81,28 @@ CREATE TABLE IF NOT EXISTS trades (
   created_at   INTEGER NOT NULL DEFAULT (unixepoch())
 )`;
 
+/**
+ * กันส่งแจ้งเตือนซ้ำ
+ *
+ * id = "<event id>:<ชนิดแจ้งเตือน>" — ตัว scheduler ยิงเข้ามาทุกกี่นาทีก็ได้
+ * โดยไม่ต้องกลัวว่าผู้ใช้จะโดนข้อความเดิมรัว ๆ ซึ่งเป็นเรื่องที่ทำให้คนปิดบอททิ้ง
+ */
+const ALERTS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS alerts_sent (
+  id       TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  kind     TEXT NOT NULL,
+  event_ts INTEGER NOT NULL,
+  sent_at  INTEGER NOT NULL DEFAULT (unixepoch())
+)`;
+
 const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_reactions_key ON reactions(key)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_ts ON reactions(ts)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_country_imp ON reactions(country, importance)",
   "CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(open_ts)",
   "CREATE INDEX IF NOT EXISTS idx_trades_session ON trades(session_tag)",
+  "CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts_sent(event_ts)",
 ];
 
 /**
@@ -107,6 +123,7 @@ export async function ensureSchema(): Promise<void> {
     ready = (async () => {
       await db.execute(SCHEMA);
       await db.execute(TRADES_SCHEMA);
+      await db.execute(ALERTS_SCHEMA);
       for (const sql of MIGRATIONS) {
         try {
           await db.execute(sql);
