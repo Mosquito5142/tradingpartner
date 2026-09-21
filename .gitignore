@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# README บอกให้ cp .env.example .env.local — ถ้าไม่ commit ไฟล์นี้ คนโคลนไปทำตามไม่ได้
+# ข้างในเป็นค่าตัวอย่างล้วน ไม่มีความลับจริง
+!.env.example
 
 # vercel
 .vercel
