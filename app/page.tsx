@@ -3,6 +3,7 @@ import Chart, { type NewsMark } from "@/components/Chart";
 import EventList, { type EventItem } from "@/components/EventList";
 import { HourStrip, TopWindows } from "@/components/HourStrip";
 import LevelsTable from "@/components/LevelsTable";
+import RegimeBand from "@/components/RegimeBand";
 import RiskCalculator from "@/components/RiskCalculator";
 import { Banner, Panel } from "@/components/ui";
 import { CONFIG, loadDashboard } from "@/lib/dashboard";
@@ -119,6 +120,11 @@ export default async function Home() {
               </p>
               <LevelsTable levels={d.levels} price={d.price.price} />
             </div>
+          </div>
+
+          {/* วางไว้ใต้ตารางแนวโดยตรง — ตารางบอกว่าเส้นอยู่ตรงไหน แถบนี้บอกว่าตอนนี้เชื่อได้แค่ไหน */}
+          <div className="mt-4">
+            <RegimeBand regime={d.regime} />
           </div>
 
           <RiskCalculator

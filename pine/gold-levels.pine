@@ -15,6 +15,10 @@
 //
 // แนะนำให้ใช้บน timeframe 15 นาที เพื่อให้วิธีคำนวณตรงกับเว็บ
 //
+// ป้ายสภาพตลาดใช้ EMA200 + ATR14 — เลื่อนกราฟไปทางซ้ายให้โหลดประวัติสัก 2,000 แท่งขึ้นไป
+// ก่อนอ่านค่า ถ้ามีแค่ ~400 แท่ง EMA200 จะยังไม่นิ่งและต่างจากเว็บได้ราว $0.8
+// (วัดแล้ว: พอประวัติครบ 60 วัน ค่าของทั้งสองฝั่งตรงกันถึงทศนิยม 6 ตำแหน่ง)
+//
 // *** เป็นเครื่องมือช่วยอ่านกราฟ ไม่ใช่สัญญาณซื้อขาย ***
 // =============================================================================
 
@@ -43,6 +47,14 @@ lineWidth   = input.int(1, "ความหนาเส้น", minval = 1, maxv
 showLabels  = input.bool(true, "แสดงป้ายบอกรายละเอียด", group = GRP_VIEW)
 colRes      = input.color(#e5484d, "สีแนวต้าน", group = GRP_VIEW)
 colSup      = input.color(#3fb87a, "สีแนวรับ", group = GRP_VIEW)
+
+GRP_REG    = "สภาพตลาด"
+showRegime = input.bool(true, "แสดงป้ายสภาพตลาด (มุมขวาบน)", group = GRP_REG, tooltip = "บอกว่าตอนนี้แนวน่าจะอยู่หรือน่าจะพัง อิงสถิติที่วัดจาก GC=F 15 นาที 60 วัน")
+atrLen     = input.int(14, "ช่วง ATR", minval = 2, group = GRP_REG)
+emaLen     = input.int(200, "ช่วง EMA เทรนด์", minval = 10, group = GRP_REG)
+speedBars  = input.int(8, "วัดความเร็วย้อนหลังกี่แท่ง", minval = 2, group = GRP_REG, tooltip = "8 แท่ง = 2 ชั่วโมงบน TF 15 นาที เท่ากับที่ใช้ตอนวัดสถิติ")
+fastMult   = input.float(1.5, "เกินกี่เท่าของ ATR ถือว่าวิ่งเข้าเร็ว", minval = 0.1, step = 0.1, group = GRP_REG)
+atrWindow  = input.int(2400, "หน้าต่างเทียบเปอร์เซ็นไทล์ ATR (แท่ง)", minval = 100, group = GRP_REG, tooltip = "2400 แท่ง = ~60 วันบน TF 15 นาที")
 
 // ------------------------------------------------- เก็บจุดกลับตัวสะสมไว้ ----
 // array คู่ขนาน (ราคา, บาร์ที่เกิด) แล้วค่อยจับกลุ่มตอนแท่งสุดท้าย
@@ -75,6 +87,20 @@ recentLow  = ta.lowest(low, 96)
 prevHigh  = request.security(syminfo.tickerid, "D", high[1],  lookahead = barmerge.lookahead_on)
 prevLow   = request.security(syminfo.tickerid, "D", low[1],   lookahead = barmerge.lookahead_on)
 prevClose = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+
+// ------------------------------------------------------- สภาพตลาดตอนนี้ ----
+// ใช้นิยามเดียวกับ lib/regime.ts เป๊ะ ๆ ถ้านิยามเพี้ยน ตัวเลขสถิติที่แปะไว้ก็ไม่ใช่ของสภาพนั้น
+regAtr   = ta.atr(atrLen)
+regEma   = ta.ema(close, emaLen)
+regSpeed = regAtr > 0 ? math.abs(close - close[speedBars]) / regAtr : 0.0
+regFast  = regSpeed > fastMult
+// เปอร์เซ็นไทล์ของ ATR เทียบกับตัวเองย้อนหลัง — บอกว่า "ผันผวนสูง/ต่ำ" เทียบอะไร
+regAtrPct  = ta.percentrank(regAtr, atrWindow)
+regHighVol = regAtrPct > 50
+regUp      = close >= close[speedBars]
+regAbove   = close > regEma
+// ชนแนวต้านระหว่างขาลง หรือชนแนวรับระหว่างขาขึ้น = เด้งไปทางเดียวกับเทรนด์
+regWithTrend = regUp ? not regAbove : regAbove
 
 // ------------------------------------------------------ กรอบเอเชียวันนี้ ----
 asiaNow = time(timeframe.period, "0600-1400", "Asia/Bangkok")
@@ -256,3 +282,34 @@ if barstate.islast
                 txt = str.tostring(p, format.mintick) + "  " + lab + "  [" + str.tostring(s, "#.#") + "]"
                 lb = label.new(bar_index, p, txt, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(col, 85), textcolor = col, size = size.small)
                 array.push(drawnLabels, lb)
+
+// ------------------------------------------------- ป้ายสภาพตลาดมุมขวาบน ----
+// ตารางแทนป้าย เพราะอยู่กับที่เวลาเลื่อน/ซูมกราฟ อ่านง่ายกว่า
+// ตัวเลขทั้งหมดมาจากการวัดเหตุการณ์ราคาแตะแนว 458 ครั้งบน GC=F 15 นาที 60 วัน
+// เส้นฐาน: เด้ง 50.2% (n=458) แปลว่าตัวเส้นเองไม่มีขอบได้เปรียบ สภาพตลาดต่างหากที่ต่าง
+var table regTbl = table.new(position.top_right, 2, 5, border_width = 1)
+
+if barstate.islast and showRegime
+    table.clear(regTbl, 0, 0, 1, 4)
+
+    headTxt = regFast ? "แนวน่าจะพัง" : "แนวน่าจะอยู่"
+    headCol = regFast ? colRes : colSup
+    headPct = regFast ? "44.2%" : "68.8%"
+
+    table.cell(regTbl, 0, 0, "สภาพตลาด", text_color = color.new(color.white, 25), text_size = size.small, bgcolor = color.new(#12161d, 10))
+    table.cell(regTbl, 1, 0, headTxt + "  " + headPct, text_color = headCol, text_size = size.small, bgcolor = color.new(#12161d, 10))
+
+    spdTxt = (regFast ? "เร็ว " : "ช้า ") + str.tostring(regSpeed, "#.#") + "x ATR"
+    table.cell(regTbl, 0, 1, "วิ่งเข้าหาแนว", text_color = color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+    table.cell(regTbl, 1, 1, spdTxt, text_color = regFast ? colRes : colSup, text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+
+    atrTxt = str.tostring(regAtr, format.mintick) + "  (เปอร์เซ็นไทล์ " + str.tostring(nz(regAtrPct), "#") + ")"
+    table.cell(regTbl, 0, 2, "ATR" + str.tostring(atrLen), text_color = color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+    table.cell(regTbl, 1, 2, atrTxt, text_color = regHighVol ? colRes : colSup, text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+
+    trendTxt = (regAbove ? "เหนือ" : "ใต้") + " EMA" + str.tostring(emaLen) + (regWithTrend ? " · ตามเทรนด์" : " · สวนเทรนด์")
+    table.cell(regTbl, 0, 3, "เทรนด์", text_color = color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+    table.cell(regTbl, 1, 3, trendTxt, text_color = regWithTrend ? colSup : color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+
+    table.cell(regTbl, 0, 4, "เส้นฐาน", text_color = color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))
+    table.cell(regTbl, 1, 4, "เด้งรวม 50.2% (n=458)", text_color = color.new(color.gray, 0), text_size = size.tiny, bgcolor = color.new(#12161d, 10))

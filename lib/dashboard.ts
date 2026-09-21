@@ -7,6 +7,7 @@ import { isConfigured } from "./db";
 import { todayHours, topWindows, volatilityProfile } from "./hours";
 import { buildLevels } from "./levels";
 import { loadPrice, type PriceData } from "./price";
+import { readRegime, type Regime } from "./regime";
 import { allRecords, summarize, type LabSummary } from "./reactions";
 import { nowSec } from "./time";
 import { isNoise, thaiTitle } from "./translate";
@@ -28,6 +29,7 @@ export interface Dashboard {
   levels: Level[];
   hours: HourRow[];
   windows: HourRow[];
+  regime: Regime | null;
   card: BriefingCard | null;
   lab: LabSummary;
   now: number;
@@ -75,6 +77,15 @@ export async function loadDashboard(): Promise<Dashboard> {
     levels,
     hours,
     windows: topWindows(hours),
+    // ใช้ GC=F 60 วันเป็นฐานคำนวณ เพราะเป็นชุดเดียวกับที่วัดสถิติไว้
+    // แท่งโบรกเกอร์ (PAXG 1000 แท่ง ≈ 10 วัน) สั้นเกินกว่าจะเทียบเปอร์เซ็นไทล์ ATR ได้ตรง
+    regime: price
+      ? readRegime(
+          price.profileBars.length >= 250 ? price.profileBars : price.bars,
+          levels,
+          price.price,
+        )
+      : null,
     card: buildBriefing(items, now, records, price?.price, levels),
     lab: summarize(records, isConfigured()),
     now,
