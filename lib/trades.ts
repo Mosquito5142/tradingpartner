@@ -124,11 +124,19 @@ export async function saveTrades(trades: Trade[]) {
     sql: `INSERT INTO trades (ticket, symbol, side, lots, open_ts, close_ts, open_price, close_price,
             sl, tp, profit, commission, swap, comment, session_tag, news_tag, hold_min, risk_pct, r_multiple, source)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          -- ticket คือตัวตนของไม้ ฟิลด์อื่นเอาของรายงานใหม่เสมอ
+          -- (จำเป็นสำหรับกรณีนำเข้าซ้ำเพื่อแก้ GMT ที่ตั้งผิด ถ้าไม่อัปเดต open_ts ด้วย
+          --  เวลาเปิดจะค้างค่าเก่าแต่ป้ายเซสชันเปลี่ยน กลายเป็นขัดกันเอง)
           ON CONFLICT(ticket) DO UPDATE SET
-            close_ts = excluded.close_ts, close_price = excluded.close_price,
+            symbol = excluded.symbol, side = excluded.side, lots = excluded.lots,
+            open_ts = excluded.open_ts, close_ts = excluded.close_ts,
+            open_price = excluded.open_price, close_price = excluded.close_price,
+            sl = excluded.sl, tp = excluded.tp,
             profit = excluded.profit, commission = excluded.commission, swap = excluded.swap,
+            comment = excluded.comment,
             session_tag = excluded.session_tag, news_tag = excluded.news_tag,
-            hold_min = excluded.hold_min, risk_pct = excluded.risk_pct, r_multiple = excluded.r_multiple`,
+            hold_min = excluded.hold_min, risk_pct = excluded.risk_pct,
+            r_multiple = excluded.r_multiple, source = excluded.source`,
     args: [t.ticket, t.symbol, t.side, t.lots, t.openTs, t.closeTs, t.openPrice, t.closePrice,
            t.sl, t.tp, t.profit, t.commission, t.swap, t.comment,
            t.sessionTag, t.newsTag, t.holdMin, t.riskPct, t.rMultiple, t.source],

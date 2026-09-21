@@ -226,7 +226,9 @@ export function parseStatement(text: string, serverOffsetHours = 7): ParseResult
 
     const ticketRaw = get(cells, "ticket").trim();
     let ticket = ticketRaw || `${openTs}:${get(cells, "symbol")}:${lots}`;
-    if (seen.has(ticket)) ticket = `${ticket}#${i}`; // กัน ticket ซ้ำในไฟล์เดียว
+    // กัน ticket ซ้ำในไฟล์เดียว — ต่อท้ายด้วยเวลาเปิด ไม่ใช่เลขแถว
+    // เพราะเลขแถวจะเปลี่ยนเมื่อ export รอบหน้ามีไม้เพิ่ม ทำให้ไม้เดิมถูกบันทึกซ้ำ
+    if (seen.has(ticket)) ticket = `${ticket}@${openTs}`;
     seen.add(ticket);
 
     trades.push({
