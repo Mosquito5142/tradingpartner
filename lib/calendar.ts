@@ -46,14 +46,19 @@ const isoZ = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, ".000Z");
 /** ปฏิทินเปลี่ยนไม่บ่อย — cache 5 นาที เพื่อไม่ให้ยิง API ต้นทางทุกครั้งที่มีคนเปิดหน้าเว็บ */
 const CALENDAR_TTL = 300;
 
-async function httpGet(url: string, headers: Record<string, string> = {}, timeoutMs = 25_000) {
+async function httpGet(
+  url: string,
+  headers: Record<string, string> = {},
+  timeoutMs = 25_000,
+  ttlSec = CALENDAR_TTL,
+) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": UA, ...headers },
       signal: controller.signal,
-      next: { revalidate: CALENDAR_TTL },
+      next: { revalidate: ttlSec },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
@@ -71,13 +76,18 @@ interface TVItem {
 }
 
 /** ดึงจาก TradingView ช่วงเดียว (ไม่ควรเกิน ~60 วัน) */
-export async function fetchTradingView(from: Date, to: Date, countries: string[]): Promise<CalendarEvent[]> {
+export async function fetchTradingView(
+  from: Date,
+  to: Date,
+  countries: string[],
+  ttlSec = CALENDAR_TTL,
+): Promise<CalendarEvent[]> {
   const query = new URLSearchParams({
     from: isoZ(from),
     to: isoZ(to),
     countries: countries.join(","),
   });
-  const raw = await httpGet(`${TV_URL}?${query}`, { Origin: "https://www.tradingview.com" });
+  const raw = await httpGet(`${TV_URL}?${query}`, { Origin: "https://www.tradingview.com" }, 25_000, ttlSec);
   const payload = JSON.parse(raw) as { status?: string; result?: TVItem[] };
   if (payload.status !== "ok") throw new Error(`TradingView ตอบกลับผิดปกติ: ${payload.status}`);
 
@@ -170,6 +180,8 @@ export async function loadCalendar(
   daysBack: number,
   daysAhead: number,
   countries: string[],
+  /** ลดลงได้ตอนอยู่ในช่วงข่าว เพื่อให้เห็นตัวเลข actual เร็วที่สุด (หน้า /live ใช้ 20 วิ) */
+  ttlSec = CALENDAR_TTL,
 ): Promise<CalendarResult> {
   const errors: string[] = [];
   const now = Date.now();
@@ -179,6 +191,7 @@ export async function loadCalendar(
       new Date(now - daysBack * 86400_000),
       new Date(now + daysAhead * 86400_000),
       countries,
+      ttlSec,
     );
     if (events.length) {
       return { events, source: "TradingView", fetchedAt: Math.floor(now / 1000), stale: false, errors };

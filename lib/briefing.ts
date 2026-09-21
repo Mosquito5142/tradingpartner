@@ -8,7 +8,9 @@
 import { statsFor } from "./reactions";
 import { groupKey } from "./reactions";
 import { thDateTime } from "./time";
-import type { AnnotatedEvent, Level, ReactionRecord, ReactionStats } from "./types";
+import type {
+  AnnotatedEvent, Direction, Level, ReactionRecord, ReactionStats, Surprise,
+} from "./types";
 
 /** ขอบได้เปรียบของกฎทิศทางอยู่ราว 5-15 นาที หลัง 30 นาทีเท่ากับเดาสุ่ม (วัดจากข้อมูลจริง) */
 export const EDGE_WINDOW_MIN = 15;
@@ -24,6 +26,10 @@ export interface BriefingCard {
   kind: string;
   forecast: string;
   previous: string;
+  /** ว่างจนกว่าจะประกาศ — หน้า /live ดึงซ้ำถี่ ๆ เพื่อรอค่านี้ */
+  actual: string;
+  surprise: Surprise;
+  outcome: Direction | "neutral" | "";
   theory: { dirIfHigher: string; why: string };
   edgeWindowMin: number;
   history: {
@@ -74,8 +80,21 @@ export function buildBriefing(
   levels?: Level[],
 ): BriefingCard | null {
   const picked = pickNext(items, nowTs);
-  if (!picked) return null;
+  return picked ? buildCard(picked, records, price, levels) : null;
+}
 
+/**
+ * สร้างการ์ดจากข่าวที่เลือกมาแล้ว
+ *
+ * แยกออกจาก buildBriefing เพราะหน้า /live ต้องเลือกเองว่าจะโฟกัสข่าวไหน:
+ * หลังประกาศแล้วต้องยังจ้องข่าวตัวเดิมต่ออีก 30 นาที ไม่ใช่กระโดดไปข่าวถัดไปทันที
+ */
+export function buildCard(
+  picked: AnnotatedEvent,
+  records: ReactionRecord[],
+  price?: number,
+  levels?: Level[],
+): BriefingCard {
   const { event, bias, title } = picked;
   const key = groupKey(event);
   const history = statsFor(records, key);
@@ -92,6 +111,9 @@ export function buildBriefing(
     kind: bias.kind,
     forecast: event.forecast,
     previous: event.previous,
+    actual: event.actual,
+    surprise: bias.surprise,
+    outcome: bias.outcome,
     theory: { dirIfHigher: bias.dirIfHigher, why: bias.why },
     edgeWindowMin: EDGE_WINDOW_MIN,
     history:

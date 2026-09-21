@@ -34,6 +34,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/" className="rounded-md px-3 py-1.5 text-muted hover:bg-raise hover:text-text">
                 หน้าหลัก
               </Link>
+              <Link href="/live" className="rounded-md px-3 py-1.5 text-muted hover:bg-raise hover:text-text">
+                โหมดข่าว
+              </Link>
               <Link href="/lab" className="rounded-md px-3 py-1.5 text-muted hover:bg-raise hover:text-text">
                 Reaction Lab
               </Link>
