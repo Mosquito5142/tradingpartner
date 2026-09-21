@@ -1,0 +1,176 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+/**
+ * นำเข้าไม้เทรด — อัปโหลดไฟล์ statement หรือกรอกมือ
+ * ทำทั้งสองทางเพราะบางโบรกเกอร์ export ไม่ได้ / ผู้ใช้อาจอยากเพิ่มทีละไม้
+ */
+export default function TradeImport({ defaultBalance }: { defaultBalance: number }) {
+  const router = useRouter();
+  const [mode, setMode] = useState<"file" | "manual">("file");
+  const [balance, setBalance] = useState(String(defaultBalance));
+  const [offset, setOffset] = useState("7");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const field = "w-full rounded-md border border-line2 bg-ink px-2 py-1.5 text-[13.5px] tnum text-text outline-none focus:border-[#3d6fb5]";
+  const label = "flex flex-col gap-1 text-[11.5px] text-muted";
+
+  async function send(payload: Record<string, unknown>) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ balance: parseFloat(balance) || undefined, ...payload }),
+      });
+      const j = await res.json();
+      if (j.ok) {
+        const warn = j.warnings?.length ? ` · ${j.warnings.join(" · ")}` : "";
+        setMsg({ ok: true, text: `นำเข้า ${j.imported} ไม้ (${j.format})${warn}` });
+        router.refresh();
+      } else {
+        const hint = j.headers?.length ? ` — หัวตารางที่เจอ: ${j.headers.slice(0, 10).join(" | ")}` : "";
+        const warn = j.warnings?.length ? ` · ${j.warnings.join(" · ")}` : "";
+        setMsg({ ok: false, text: `${j.error}${warn}${hint}` });
+      }
+    } catch (e) {
+      setMsg({ ok: false, text: `ส่งข้อมูลไม่สำเร็จ: ${(e as Error).message}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onFile(file: File) {
+    const text = await file.text();
+    await send({ text, serverOffsetHours: parseFloat(offset) || 7 });
+  }
+
+  async function onManual(form: HTMLFormElement) {
+    const d = new FormData(form);
+    const num = (k: string) => {
+      const v = d.get(k);
+      return v ? Number(v) : undefined;
+    };
+    await send({
+      manual: {
+        symbol: String(d.get("symbol") || "XAUUSD"),
+        side: String(d.get("side") || "buy"),
+        lots: num("lots"),
+        openTime: String(d.get("openTime") || ""),
+        closeTime: String(d.get("closeTime") || ""),
+        openPrice: num("openPrice"),
+        closePrice: num("closePrice"),
+        sl: num("sl"),
+        profit: num("profit"),
+        comment: String(d.get("comment") || ""),
+      },
+    });
+    form.reset();
+  }
+
+  return (
+    <div className="rounded-xl border border-line bg-panel p-4 sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="mr-2 text-[15.5px] font-semibold text-[#c7cdd8]">เพิ่มไม้เทรด</h2>
+        {(["file", "manual"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`rounded-full border px-3 py-1.5 text-[13px] ${
+              mode === m
+                ? "border-[#3d6fb5] bg-[#22314a] text-[#dbe6f7]"
+                : "border-line2 bg-raise text-muted hover:border-[#4a5567]"
+            }`}
+          >
+            {m === "file" ? "อัปโหลดไฟล์ statement" : "กรอกมือ"}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <label className={label}>
+          ยอดเงินในบัญชี (ใช้คิด %เสี่ยง)
+          <input className={field} type="number" step="0.01" value={balance} onChange={(e) => setBalance(e.target.value)} />
+        </label>
+        {mode === "file" && (
+          <label className={label}>
+            เวลาเซิร์ฟเวอร์โบรกฯ (GMT+)
+            <input className={field} type="number" step="1" value={offset} onChange={(e) => setOffset(e.target.value)} />
+          </label>
+        )}
+      </div>
+
+      {mode === "file" ? (
+        <div>
+          <input
+            type="file"
+            accept=".htm,.html,.csv,.tsv,.txt"
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onFile(f);
+            }}
+            className="block w-full text-[13px] text-muted file:mr-3 file:rounded-md file:border-0 file:bg-[#22314a] file:px-3 file:py-1.5 file:text-[13px] file:text-[#dbe6f7] hover:file:bg-[#2a3c58]"
+          />
+          <p className="mt-2 text-[12px] leading-relaxed text-faint">
+            MT4: คลิกขวาในแท็บ Account History → <b>Save as Report</b> ·
+            MT5: แท็บ History → คลิกขวา → <b>Report</b> → HTML
+            <br />
+            เวลาเซิร์ฟเวอร์โบรกฯ ส่วนใหญ่เป็น GMT+2 หรือ +3 (ถ้าตั้งผิด เวลาไม้จะเพี้ยน
+            แต่แก้แล้วนำเข้าใหม่ทับได้เลย ไม่เกิดรายการซ้ำ)
+          </p>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void onManual(e.currentTarget);
+          }}
+          className="grid grid-cols-2 gap-2.5 sm:grid-cols-4"
+        >
+          <label className={label}>
+            ทิศทาง
+            <select name="side" className={field} defaultValue="buy">
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </label>
+          <label className={label}>ล็อต<input name="lots" className={field} type="number" step="0.01" required /></label>
+          <label className={label}>เวลาเปิด<input name="openTime" className={field} type="datetime-local" required /></label>
+          <label className={label}>เวลาปิด<input name="closeTime" className={field} type="datetime-local" /></label>
+          <label className={label}>ราคาเข้า<input name="openPrice" className={field} type="number" step="0.001" required /></label>
+          <label className={label}>ราคาออก<input name="closePrice" className={field} type="number" step="0.001" /></label>
+          <label className={label}>SL<input name="sl" className={field} type="number" step="0.001" /></label>
+          <label className={label}>กำไร/ขาดทุน<input name="profit" className={field} type="number" step="0.01" required /></label>
+          <label className={`${label} col-span-2`}>หมายเหตุ<input name="comment" className={field} type="text" /></label>
+          <div className="col-span-2 flex items-end">
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-md border border-[#3d6fb5] bg-[#22314a] px-4 py-1.5 text-[13px] text-[#dbe6f7] disabled:opacity-50"
+            >
+              บันทึกไม้นี้
+            </button>
+          </div>
+        </form>
+      )}
+
+      {busy && <p className="mt-2 text-[13px] text-muted">กำลังประมวลผล...</p>}
+      {msg && (
+        <p
+          className={`mt-2 rounded-md border px-2.5 py-1.5 text-[12.5px] leading-relaxed ${
+            msg.ok
+              ? "border-[#1f4a32] bg-[#10291c] text-up"
+              : "border-[#54331f] bg-[#2a1a12] text-[#ffb38a]"
+          }`}
+        >
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}

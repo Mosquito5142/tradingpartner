@@ -48,19 +48,73 @@ CREATE TABLE IF NOT EXISTS reactions (
   created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 )`;
 
+/**
+ * สมุดบันทึกเทรด — ไม้ที่ผู้ใช้เทรดจริง
+ *
+ * ticket = เลขที่ออเดอร์จากโบรกเกอร์ ใช้เป็น primary key เพื่อกันนำเข้าซ้ำ
+ * ไม้ที่กรอกมือจะได้ id ขึ้นต้นด้วย "manual:"
+ *
+ * ช่องที่ลงท้ายด้วย _tag คือป้ายที่โปรแกรมคำนวณให้ตอนนำเข้า
+ */
+const TRADES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS trades (
+  ticket       TEXT PRIMARY KEY,
+  symbol       TEXT NOT NULL,
+  side         TEXT NOT NULL,
+  lots         REAL NOT NULL,
+  open_ts      INTEGER NOT NULL,
+  close_ts     INTEGER,
+  open_price   REAL NOT NULL,
+  close_price  REAL,
+  sl           REAL,
+  tp           REAL,
+  profit       REAL NOT NULL,
+  commission   REAL NOT NULL DEFAULT 0,
+  swap         REAL NOT NULL DEFAULT 0,
+  comment      TEXT NOT NULL DEFAULT '',
+  session_tag  TEXT NOT NULL DEFAULT '',
+  news_tag     TEXT NOT NULL DEFAULT '',
+  hold_min     INTEGER,
+  risk_pct     REAL,
+  r_multiple   REAL,
+  source       TEXT NOT NULL DEFAULT 'import',
+  created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+)`;
+
 const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_reactions_key ON reactions(key)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_ts ON reactions(ts)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_country_imp ON reactions(country, importance)",
+  "CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(open_ts)",
+  "CREATE INDEX IF NOT EXISTS idx_trades_session ON trades(session_tag)",
 ];
 
-/** สร้างตารางถ้ายังไม่มี — เรียกซ้ำได้ ทำจริงครั้งเดียวต่อ process */
+/**
+ * เพิ่มคอลัมน์ใหม่ให้ตารางเดิม — SQLite ไม่มี "ADD COLUMN IF NOT EXISTS"
+ * จึงต้องยอมให้ error "duplicate column" ผ่านไป (แปลว่ามีอยู่แล้ว)
+ */
+const MIGRATIONS = [
+  "ALTER TABLE reactions ADD COLUMN actual_raw REAL",
+  "ALTER TABLE reactions ADD COLUMN forecast_raw REAL",
+  "ALTER TABLE reactions ADD COLUMN surprise_pct REAL",
+];
+
+/** สร้างตาราง/คอลัมน์ถ้ายังไม่มี — เรียกซ้ำได้ ทำจริงครั้งเดียวต่อ process */
 export async function ensureSchema(): Promise<void> {
   const db = getDb();
   if (!db) return;
   if (!ready) {
     ready = (async () => {
       await db.execute(SCHEMA);
+      await db.execute(TRADES_SCHEMA);
+      for (const sql of MIGRATIONS) {
+        try {
+          await db.execute(sql);
+        } catch (err) {
+          // มีคอลัมน์อยู่แล้ว = ปกติ อย่างอื่นคือปัญหาจริง ต้องโยนต่อ
+          if (!/duplicate column/i.test(String(err))) throw err;
+        }
+      }
       for (const sql of INDEXES) await db.execute(sql);
     })().catch((err) => {
       ready = null; // ให้ลองใหม่ได้ในครั้งถัดไป
