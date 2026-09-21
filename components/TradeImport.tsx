@@ -11,7 +11,7 @@ export default function TradeImport({ defaultBalance }: { defaultBalance: number
   const router = useRouter();
   const [mode, setMode] = useState<"file" | "manual">("file");
   const [balance, setBalance] = useState(String(defaultBalance));
-  const [offset, setOffset] = useState("7");
+  const [offset, setOffset] = useState("0");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -44,8 +44,27 @@ export default function TradeImport({ defaultBalance }: { defaultBalance: number
     }
   }
 
+  /**
+   * MT5 ส่งออกรายงานเป็น UTF-16 (ไม่ใช่ UTF-8) — file.text() ถอดรหัสเป็น UTF-8 เสมอ
+   * จึงได้ข้อความเพี้ยนทั้งไฟล์ ต้องดู BOM เองแล้วเลือก decoder ให้ถูก
+   */
+  async function decode(file: File): Promise<string> {
+    const buf = await file.arrayBuffer();
+    const b = new Uint8Array(buf);
+    let enc = "utf-8";
+    if (b[0] === 0xff && b[1] === 0xfe) enc = "utf-16le";
+    else if (b[0] === 0xfe && b[1] === 0xff) enc = "utf-16be";
+    else {
+      // ไม่มี BOM: UTF-16 ฝั่ง ASCII จะมีไบต์ 0x00 สลับทุกตัว ซึ่ง UTF-8 ไม่มีทางมี
+      const probe = b.subarray(0, 400);
+      const zeros = probe.reduce((n, x) => n + (x === 0 ? 1 : 0), 0);
+      if (zeros > probe.length / 4) enc = b[0] === 0 ? "utf-16be" : "utf-16le";
+    }
+    return new TextDecoder(enc).decode(buf).replace(/^﻿/, "");
+  }
+
   async function onFile(file: File) {
-    const text = await file.text();
+    const text = await decode(file);
     await send({ text, serverOffsetHours: parseFloat(offset) || 7 });
   }
 
@@ -120,7 +139,9 @@ export default function TradeImport({ defaultBalance }: { defaultBalance: number
             MT4: คลิกขวาในแท็บ Account History → <b>Save as Report</b> ·
             MT5: แท็บ History → คลิกขวา → <b>Report</b> → HTML
             <br />
-            เวลาเซิร์ฟเวอร์โบรกฯ ส่วนใหญ่เป็น GMT+2 หรือ +3 (ถ้าตั้งผิด เวลาไม้จะเพี้ยน
+            <b>Exness = GMT+0</b> · โบรกอื่นส่วนใหญ่เป็น +2 หรือ +3 —
+            เช็กได้จากนาฬิกาในหน้าต่าง Market Watch เทียบกับเวลาจริง
+            (ถ้าตั้งผิด เวลาไม้จะเพี้ยนและป้ายเซสชัน/ช่วงข่าวจะผิดตาม
             แต่แก้แล้วนำเข้าใหม่ทับได้เลย ไม่เกิดรายการซ้ำ)
           </p>
         </div>

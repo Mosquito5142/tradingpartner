@@ -103,12 +103,24 @@ function rowsFromHtml(text: string): string[][] {
   let tr: RegExpExecArray | null;
   while ((tr = trRe.exec(text)) !== null) {
     const cells: string[] = [];
-    const tdRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+    const tdRe = /<t[dh]([^>]*)>([\s\S]*?)<\/t[dh]>/gi;
     let td: RegExpExecArray | null;
-    while ((td = tdRe.exec(tr[1])) !== null) cells.push(stripTags(td[1]));
+    while ((td = tdRe.exec(tr[1])) !== null) {
+      // MT5 แทรกช่องซ่อน <td class="hidden" colspan="8"> ไว้กลางแถวข้อมูล
+      // แต่ไม่มีในแถวหัวตาราง ถ้าไม่ตัดทิ้ง index ของทุกคอลัมน์หลังจากนั้นจะเลื่อนไป 1 ช่อง
+      if (/class\s*=\s*["'][^"']*\bhidden\b/i.test(td[1])) continue;
+      cells.push(stripTags(td[2]));
+    }
     if (cells.length) rows.push(cells);
   }
   return rows;
+}
+
+/** แถวนี้หน้าตาเหมือนหัวตารางอีกอันไหม — ใช้หยุดอ่านก่อนข้ามไปตารางถัดไปของไฟล์ */
+function looksLikeHeader(cells: string[]): boolean {
+  if (cells.length < 4) return false;
+  const matched = cells.filter((c) => c && matchColumn(c)).length;
+  return matched >= 4;
 }
 
 function rowsFromDelimited(text: string): string[][] {
@@ -192,6 +204,9 @@ export function parseStatement(text: string, serverOffsetHours = 7): ParseResult
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const cells = rows[i];
     if (cells.length < 4) continue;
+    // รายงาน MT5 มีหลายตารางในไฟล์เดียว (Positions / Orders / Deals) ถ้าปล่อยให้อ่านต่อ
+    // จะเอา index คอลัมน์ของตารางแรกไปใช้กับตารางถัดไป — หยุดตรงหัวตารางอันใหม่
+    if (looksLikeHeader(cells)) break;
 
     const rawType = get(cells, "type").toLowerCase();
     // เอาเฉพาะไม้ซื้อขายจริง — ข้ามฝาก/ถอน/ดอกเบี้ย/บรรทัดสรุป

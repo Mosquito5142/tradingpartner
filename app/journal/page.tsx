@@ -58,6 +58,7 @@ function RiskChart({ trades }: { trades: Trade[] }) {
       </p>
     );
   }
+  const noSl = trades.length - withRisk.length;
   const maxRisk = Math.max(...withRisk.map((t) => t.riskPct), 10);
   const sorted = [...withRisk].sort((a, b) => a.openTs - b.openTs);
 
@@ -81,6 +82,15 @@ function RiskChart({ trades }: { trades: Trade[] }) {
         แต่ละแท่ง = 1 ไม้ เรียงตามเวลา · สูง = เสี่ยงมาก ·{" "}
         <span className="text-down">แดง = เสี่ยงเกิน 10% ของพอร์ตในไม้เดียว</span> ·
         สูงสุดที่เจอ {maxRisk.toFixed(1)}%
+        {noSl > 0 && (
+          <>
+            {" "}
+            ·{" "}
+            <b className="text-[#ffb38a]">
+              อีก {noSl} ไม้ไม่ได้ตั้ง SL จึงไม่มีแท่ง — ความเสี่ยงจริงของไม้พวกนั้นวัดไม่ได้
+            </b>
+          </>
+        )}
       </p>
     </div>
   );
@@ -103,7 +113,7 @@ export default async function JournalPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <TradeImport defaultBalance={1455.68} />
+      <TradeImport defaultBalance={1118.3} />
 
       {!trades.length ? (
         <Panel title="ยังไม่มีไม้ในสมุด">
