@@ -28,6 +28,11 @@ export interface ParsedTrade {
 
 export interface ParseResult {
   trades: ParsedTrade[];
+  /**
+   * สกุลเงินของบัญชี ดึงจากหัวรายงาน — ว่างถ้าหาไม่เจอ
+   * สำคัญเพราะบัญชี cent (USC) ต่างจาก USD อยู่ 100 เท่า ถ้าเดาผิดตัวเลขบาทจะเพี้ยนหนัก
+   */
+  currency: string;
   /** แถวที่อ่านไม่ออก — บอกผู้ใช้ตรง ๆ ดีกว่าเงียบ */
   skipped: number;
   /** หัวตารางที่เจอ ใช้ debug เวลารูปแบบไฟล์ไม่ตรง */
@@ -53,6 +58,22 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   profit: ["profit", "กำไร", "กำไร/ขาดทุน"],
   comment: ["comment", "หมายเหตุ"],
 };
+
+/**
+ * หาสกุลเงินของบัญชีจากหัวรายงาน
+ *
+ * MT5 เขียนเป็น "183875989 (USC, Exness-MT5Real25, real, Hedge)"
+ * MT4 มักเขียนแยกเป็น "Currency: USD"
+ * หาไม่เจอก็คืนค่าว่าง แล้วให้ปลายทางตัดสินใจเอง ดีกว่าเดามั่ว
+ */
+export function detectCurrency(text: string): string {
+  const flat = text.replace(/&nbsp;/gi, " ").replace(/<[^>]+>/g, " ");
+  const account = /\b\d{4,}\s*\(\s*([A-Z]{3})\s*,/.exec(flat);
+  if (account) return account[1].toUpperCase();
+  const labelled = /(?:currency|สกุลเงิน)\s*[:：]?\s*([A-Z]{3})\b/i.exec(flat);
+  if (labelled) return labelled[1].toUpperCase();
+  return "";
+}
 
 function stripTags(html: string): string {
   return html
@@ -177,18 +198,19 @@ function findHeaderRow(rows: string[][]): { index: number; map: Record<string, n
 
 export function parseStatement(text: string, serverOffsetHours = 7): ParseResult {
   const warnings: string[] = [];
+  const currency = detectCurrency(text);
   const isHtml = /<\s*table/i.test(text) || /<\s*tr[\s>]/i.test(text);
   const rows = isHtml ? rowsFromHtml(text) : rowsFromDelimited(text);
   const format: ParseResult["format"] = isHtml ? "html" : rows.length ? "csv" : "unknown";
 
   if (!rows.length) {
-    return { trades: [], skipped: 0, headers: [], format: "unknown",
+    return { trades: [], currency, skipped: 0, headers: [], format: "unknown",
       warnings: ["อ่านไฟล์ไม่ออก — ไม่เจอตารางหรือบรรทัดข้อมูลเลย"] };
   }
 
   const header = findHeaderRow(rows);
   if (!header) {
-    return { trades: [], skipped: rows.length, headers: rows[0] ?? [], format,
+    return { trades: [], currency, skipped: rows.length, headers: rows[0] ?? [], format,
       warnings: ["ไม่เจอหัวตารางที่มีคอลัมน์ เวลา/ประเภท/กำไร ครบ — ไฟล์อาจเป็นรูปแบบที่ยังไม่รองรับ"] };
   }
 
@@ -261,6 +283,9 @@ export function parseStatement(text: string, serverOffsetHours = 7): ParseResult
   if (map.sl === undefined) {
     warnings.push("ไม่เจอคอลัมน์ SL — จะคำนวณ %เสี่ยงและ R ไม่ได้");
   }
+  if (!currency && trades.length) {
+    warnings.push("ไม่เจอสกุลเงินของบัญชีในไฟล์ — จะแปลงเป็นเงินบาทให้ไม่ได้");
+  }
 
-  return { trades, skipped, headers, format, warnings };
+  return { trades, currency, skipped, headers, format, warnings };
 }

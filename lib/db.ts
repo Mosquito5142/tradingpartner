@@ -120,6 +120,9 @@ const MIGRATIONS = [
   "ALTER TABLE reactions ADD COLUMN dn15 REAL",
   "ALTER TABLE reactions ADD COLUMN up60 REAL",
   "ALTER TABLE reactions ADD COLUMN dn60 REAL",
+  // สกุลเงินของบัญชี ดึงจากหัวรายงานตอนนำเข้า — ต้องรู้ถึงจะแปลงเป็นบาทได้ถูก
+  // (USC ของบัญชี cent ต่างจาก USD อยู่ 100 เท่า)
+  "ALTER TABLE trades ADD COLUMN currency TEXT NOT NULL DEFAULT ''",
 ];
 
 /** สร้างตาราง/คอลัมน์ถ้ายังไม่มี — เรียกซ้ำได้ ทำจริงครั้งเดียวต่อ process */

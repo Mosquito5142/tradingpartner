@@ -9,7 +9,7 @@
 import { NextResponse } from "next/server";
 import { isConfigured } from "@/lib/db";
 import { parseStatement, type ParsedTrade } from "@/lib/mt5-import";
-import { saveTrades, tagTrades } from "@/lib/trades";
+import { accountCurrency, allTrades, saveTrades, tagTrades } from "@/lib/trades";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -72,6 +72,7 @@ export async function POST(request: Request) {
     let warnings: string[] = [];
     let headers: string[] = [];
     let format = "manual";
+    let currency = "";
 
     if (body.manual) {
       const one = fromManual(body.manual);
@@ -82,12 +83,15 @@ export async function POST(request: Request) {
         );
       }
       parsed = [one];
+      // กรอกมือไม่มีสกุลเงินมาด้วย — ใช้ของบัญชีที่นำเข้าไว้แล้ว ไม่งั้นแปลงเป็นบาทไม่ได้
+      currency = accountCurrency(await allTrades());
     } else if (body.text) {
       const result = parseStatement(body.text, body.serverOffsetHours ?? 7);
       parsed = result.trades;
       warnings = result.warnings;
       headers = result.headers;
       format = result.format;
+      currency = result.currency;
     } else {
       return NextResponse.json({ ok: false, error: "ไม่มีข้อมูลส่งมา" }, { status: 400 });
     }
@@ -97,10 +101,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "ไม่พบไม้เทรดในไฟล์", warnings, headers, format });
     }
 
-    const tagged = await tagTrades(parsed, body.balance);
+    const tagged = await tagTrades(parsed, body.balance, currency);
     const saved = await saveTrades(tagged);
 
-    return NextResponse.json({ ok: true, imported: tagged.length, format, warnings, headers, ...saved });
+    return NextResponse.json({
+      ok: true, imported: tagged.length, format, currency, warnings, headers, ...saved,
+    });
   } catch (err) {
     return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
   }

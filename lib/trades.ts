@@ -22,6 +22,8 @@ const CONTRACT = 100;
 const NEWS_WINDOW_MIN = 30;
 
 export interface Trade extends ParsedTrade {
+  /** สกุลเงินของบัญชี เช่น USD หรือ USC — ว่างถ้าไฟล์ไม่ได้บอก */
+  currency: string;
   sessionTag: string;
   newsTag: string;
   holdMin: number | null;
@@ -66,8 +68,15 @@ export function summarize(trades: Trade[]): TradeStats {
  *
  * balance = ยอดเงินในบัญชี (หน่วยเดียวกับ profit ในไฟล์ statement)
  * ใช้คำนวณ %เสี่ยง ถ้าไม่ใส่มาจะข้ามการคำนวณนั้นแทนที่จะเดามั่ว
+ *
+ * currency = สกุลเงินของบัญชีจากหัวรายงาน ใช้แปลงเป็นบาทตอนแสดงผล
+ * ปล่อยว่างได้ — หน้าเว็บจะไม่แปลงให้แทนที่จะเดาว่าเป็น USD แล้วผิดไป 100 เท่า
  */
-export async function tagTrades(parsed: ParsedTrade[], balance?: number): Promise<Trade[]> {
+export async function tagTrades(
+  parsed: ParsedTrade[],
+  balance?: number,
+  currency = "",
+): Promise<Trade[]> {
   // ดึงปฏิทินช่วงที่ครอบคลุมไม้ทั้งหมด เพื่อรู้ว่าไม้ไหนเทรดตอนมีข่าว
   let newsTimes: { ts: number; title: string }[] = [];
   if (parsed.length) {
@@ -103,6 +112,7 @@ export async function tagTrades(parsed: ParsedTrade[], balance?: number): Promis
 
     return {
       ...t,
+      currency,
       sessionTag: sessionName(thParts(t.openTs).hour),
       newsTag: near ? near.title : "",
       holdMin,
@@ -122,8 +132,9 @@ export async function saveTrades(trades: Trade[]) {
 
   const statements = trades.map((t) => ({
     sql: `INSERT INTO trades (ticket, symbol, side, lots, open_ts, close_ts, open_price, close_price,
-            sl, tp, profit, commission, swap, comment, session_tag, news_tag, hold_min, risk_pct, r_multiple, source)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            sl, tp, profit, commission, swap, comment, session_tag, news_tag, hold_min, risk_pct, r_multiple,
+            source, currency)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           -- ticket คือตัวตนของไม้ ฟิลด์อื่นเอาของรายงานใหม่เสมอ
           -- (จำเป็นสำหรับกรณีนำเข้าซ้ำเพื่อแก้ GMT ที่ตั้งผิด ถ้าไม่อัปเดต open_ts ด้วย
           --  เวลาเปิดจะค้างค่าเก่าแต่ป้ายเซสชันเปลี่ยน กลายเป็นขัดกันเอง)
@@ -136,10 +147,12 @@ export async function saveTrades(trades: Trade[]) {
             comment = excluded.comment,
             session_tag = excluded.session_tag, news_tag = excluded.news_tag,
             hold_min = excluded.hold_min, risk_pct = excluded.risk_pct,
-            r_multiple = excluded.r_multiple, source = excluded.source`,
+            r_multiple = excluded.r_multiple, source = excluded.source,
+            -- สกุลเงินทับเฉพาะเมื่อรายงานใหม่บอกมา ไม่งั้นการกรอกมือจะลบค่าที่เคยได้จากไฟล์ทิ้ง
+            currency = CASE WHEN excluded.currency != '' THEN excluded.currency ELSE trades.currency END`,
     args: [t.ticket, t.symbol, t.side, t.lots, t.openTs, t.closeTs, t.openPrice, t.closePrice,
            t.sl, t.tp, t.profit, t.commission, t.swap, t.comment,
-           t.sessionTag, t.newsTag, t.holdMin, t.riskPct, t.rMultiple, t.source],
+           t.sessionTag, t.newsTag, t.holdMin, t.riskPct, t.rMultiple, t.source, t.currency],
   }));
 
   const CHUNK = 100;
@@ -172,6 +185,7 @@ function toTrade(row: Record<string, unknown>): Trade {
     riskPct: num(row.risk_pct),
     rMultiple: num(row.r_multiple),
     source: String(row.source ?? "import"),
+    currency: String(row.currency ?? ""),
   };
 }
 
@@ -185,6 +199,23 @@ export async function allTrades(): Promise<Trade[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * สกุลเงินของบัญชีจากไม้ที่เก็บไว้ — ใช้ตัวที่พบบ่อยที่สุด
+ *
+ * ปกติทุกไม้มาจากบัญชีเดียวกันจึงเหมือนกันหมด แต่ถ้าเคยนำเข้าหลายบัญชีปนกัน
+ * การเลือกตัวที่พบบ่อยสุดจะผิดน้อยกว่าเลือกตัวแรกที่เจอ
+ */
+export function accountCurrency(trades: Trade[]): string {
+  const counts = new Map<string, number>();
+  for (const t of trades) {
+    if (t.currency) counts.set(t.currency, (counts.get(t.currency) ?? 0) + 1);
+  }
+  let best = "";
+  let top = 0;
+  for (const [cur, n] of counts) if (n > top) { best = cur; top = n; }
+  return best;
 }
 
 export async function deleteAllTrades() {

@@ -2,6 +2,8 @@ import { phaseOf, pollFor, pickFocus, worthWatching, IMMINENT_MIN, WATCH_AFTER_M
 import { EDGE_WINDOW_MIN } from "@/lib/briefing";
 import { atr14, ema, readRegime } from "@/lib/regime";
 import { measure, MIN_SAMPLE } from "@/lib/reactions";
+import { detectCurrency } from "@/lib/mt5-import";
+import { fmtThb, supportsThb, toThb } from "@/lib/fx";
 import {
   adverseExcursions, expectancy, favorableExcursions, percentile, signedOutcomes, stopOutRates,
 } from "@/lib/expectancy";
@@ -277,6 +279,28 @@ export async function GET() {
     stopOutRates([rec({ dn15: 5 })], 15, [5])[0].hitPct, 100);
   t("stopOut: MAE ต่ำกว่าระยะ SL ไม่นับ",
     stopOutRates([rec({ dn15: 4.99 })], 15, [5])[0].hitPct, 0);
+
+  // ---- อ่านสกุลเงินจากหัวรายงาน ----
+  t("สกุลเงิน: MT5 Exness (cent)",
+    detectCurrency("Account: 183875989&nbsp;(USC,&nbsp;Exness-MT5Real25,&nbsp;real,&nbsp;Hedge)"), "USC");
+  t("สกุลเงิน: MT5 มาตรฐาน",
+    detectCurrency("<td>Account:</td><td>7654321 (USD, MetaQuotes-Demo, demo, Netting)</td>"), "USD");
+  t("สกุลเงิน: MT4 แบบมี label", detectCurrency("Account: 12345 main Currency: USD"), "USD");
+  t("สกุลเงิน: ภาษาไทย", detectCurrency("สกุลเงิน: USD"), "USD");
+  t("สกุลเงิน: หาไม่เจอ -> ว่าง", detectCurrency("<table><tr><td>Time</td></tr></table>"), "");
+
+  // ---- แปลงเป็นบาท ----
+  t("บาท: USD คูณเรตตรง ๆ", toThb(10, "USD", 33.34), 333.4);
+  t("บาท: USC หารร้อยก่อน", toThb(1000, "USC", 33.34), 333.4);
+  t("บาท: ตัวพิมพ์เล็กก็ได้", toThb(1000, "usc", 33.34), 333.4);
+  t("บาท: ขาดทุนติดลบ", toThb(-591.7, "USC", 33.34), -197.27);
+  t("บาท: สกุลที่ยังไม่รองรับ -> null", toThb(100, "EUR", 33.34), null);
+  t("รองรับ USC", supportsThb("USC"), true);
+  t("ไม่รองรับ EUR", supportsThb("EUR"), false);
+  t("รองรับ: สกุลว่าง -> false", supportsThb(""), false);
+  t("จัดรูปแบบบาท", fmtThb(1234.5), "฿1,234.50");
+  t("จัดรูปแบบบาท: ใส่เครื่องหมายบวก", fmtThb(197.28, true), "+฿197.28");
+  t("จัดรูปแบบบาท: ติดลบใช้ขีดหน้าสัญลักษณ์", fmtThb(-40.21, true), "-฿40.21");
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(

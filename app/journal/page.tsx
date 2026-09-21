@@ -1,9 +1,10 @@
 import TradeImport from "@/components/TradeImport";
 import { Banner, Panel } from "@/components/ui";
 import { isConfigured } from "@/lib/db";
+import { fmtThb, loadFx, supportsThb, toThb } from "@/lib/fx";
 import { thDateTime } from "@/lib/time";
 import {
-  allTrades, groupStats, HOLD_BUCKETS, RISK_BUCKETS, summarize,
+  accountCurrency, allTrades, groupStats, HOLD_BUCKETS, RISK_BUCKETS, summarize,
   type Trade, type TradeStats,
 } from "@/lib/trades";
 
@@ -11,7 +12,14 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "สมุดบันทึกเทรด" };
 
-function StatTable({ rows, first }: { rows: (TradeStats & { label: string })[]; first: string }) {
+interface Baht {
+  /** null = ยังแปลงไม่ได้ (ไม่รู้สกุลเงินของบัญชี) */
+  of: (amount: number) => number | null;
+}
+
+function StatTable({
+  rows, first, baht,
+}: { rows: (TradeStats & { label: string })[]; first: string; baht: Baht }) {
   if (!rows.length) return <p className="text-[13px] text-faint">ยังไม่มีข้อมูล</p>;
   return (
     <div className="overflow-x-auto">
@@ -38,6 +46,9 @@ function StatTable({ rows, first }: { rows: (TradeStats & { label: string })[]; 
                   {r.netProfit >= 0 ? "+" : ""}
                   {r.netProfit.toLocaleString()}
                 </b>
+                {baht.of(r.netProfit) !== null && (
+                  <div className="text-[11px] text-faint">{fmtThb(baht.of(r.netProfit)!, true)}</div>
+                )}
               </td>
               <td className="tnum py-2 text-muted">{r.profitFactor ?? "—"}</td>
             </tr>
@@ -107,13 +118,18 @@ export default async function JournalPage() {
     );
   }
 
-  const trades = await allTrades();
+  const [trades, fx] = await Promise.all([allTrades(), loadFx()]);
   const total = summarize(trades);
   const closed = trades.filter((t) => t.closeTs !== null);
 
+  // แปลงได้ต่อเมื่อรู้สกุลเงินของบัญชีจริง ๆ — เดาว่าเป็น USD แล้วผิดจะคลาดไป 100 เท่า
+  const currency = accountCurrency(trades);
+  const canThb = Boolean(currency) && supportsThb(currency);
+  const baht = { of: (amount: number) => (canThb ? toThb(amount, currency, fx.thbPerUsd) : null) };
+
   return (
     <div className="flex flex-col gap-5">
-      <TradeImport defaultBalance={1118.3} />
+      <TradeImport defaultBalance={1600.7} />
 
       {!trades.length ? (
         <Panel title="ยังไม่มีไม้ในสมุด">
@@ -128,23 +144,46 @@ export default async function JournalPage() {
           <Panel title="ภาพรวม">
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
               {[
-                ["จำนวนไม้", String(total.n), ""],
-                ["อัตราชนะ", `${total.winRate}%`, total.winRate >= 50 ? "text-up" : "text-down"],
+                ["จำนวนไม้", String(total.n), "", null],
+                ["อัตราชนะ", `${total.winRate}%`, total.winRate >= 50 ? "text-up" : "text-down", null],
                 ["กำไรสุทธิ", `${total.netProfit >= 0 ? "+" : ""}${total.netProfit.toLocaleString()}`,
-                  total.netProfit >= 0 ? "text-up" : "text-down"],
-                ["กำไรเฉลี่ย/ขาดทุนเฉลี่ย", `${total.avgWin} / ${total.avgLoss}`, ""],
+                  total.netProfit >= 0 ? "text-up" : "text-down",
+                  baht.of(total.netProfit) === null ? null : fmtThb(baht.of(total.netProfit)!, true)],
+                ["กำไรเฉลี่ย/ขาดทุนเฉลี่ย", `${total.avgWin} / ${total.avgLoss}`, "",
+                  baht.of(total.avgWin) === null
+                    ? null
+                    : `${fmtThb(baht.of(total.avgWin)!)} / ${fmtThb(baht.of(total.avgLoss)!)}`],
                 ["Profit Factor", String(total.profitFactor ?? "—"),
-                  (total.profitFactor ?? 0) >= 1 ? "text-up" : "text-down"],
-              ].map(([k, v, cls]) => (
+                  (total.profitFactor ?? 0) >= 1 ? "text-up" : "text-down", null],
+              ].map(([k, v, cls, sub]) => (
                 <div key={k}>
                   <div className="text-[11.5px] text-faint">{k}</div>
                   <div className={`tnum text-[20px] font-bold ${cls}`}>{v}</div>
+                  {sub && <div className="tnum text-[12px] text-muted">{sub}</div>}
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-[12px] text-faint">
+            <p className="mt-3 text-[12px] leading-relaxed text-faint">
               กำไรสุทธิรวมค่าคอมมิชชั่นและ swap แล้ว · Profit Factor = กำไรรวม ÷ ขาดทุนรวม
               (ต่ำกว่า 1 คือขาดทุนสุทธิ)
+              <br />
+              {canThb ? (
+                <>
+                  ตัวเลขเป็น <b className="text-[#c7cdd8]">{currency}</b>
+                  {currency === "USC" && " (บัญชี cent — 100 USC = 1 ดอลลาร์)"} ·
+                  แปลงเป็นบาทที่ <b className="text-[#c7cdd8]">1 USD = ฿{fx.thbPerUsd.toFixed(3)}</b>{" "}
+                  จาก {fx.source}
+                  {fx.stale && (
+                    <b className="text-[#ffb38a]"> — ดึงเรตสดไม่ได้ กำลังใช้ค่าประมาณในโค้ด</b>
+                  )}
+                </>
+              ) : (
+                <b className="text-[#ffb38a]">
+                  {currency
+                    ? `ยังแปลงสกุล ${currency} เป็นบาทไม่ได้ — รองรับเฉพาะ USD และ USC`
+                    : "ไม่รู้สกุลเงินของบัญชี จึงไม่แปลงเป็นบาทให้ — นำเข้าไฟล์ statement ใหม่อีกครั้งเพื่อให้ระบบอ่านสกุลเงินจากหัวรายงาน"}
+                </b>
+              )}
             </p>
           </Panel>
 
@@ -154,30 +193,32 @@ export default async function JournalPage() {
           >
             <RiskChart trades={trades} />
             <div className="mt-4">
-              <StatTable rows={groupStats(trades, RISK_BUCKETS)} first="ช่วง %เสี่ยง" />
+              <StatTable rows={groupStats(trades, RISK_BUCKETS)} first="ช่วง %เสี่ยง" baht={baht} />
             </div>
           </Panel>
 
           <div className="grid gap-5 lg:grid-cols-2">
             <Panel title="แยกตามเซสชัน" sub="เวลาไทย — ดูว่าช่วงไหนคุณทำเงินได้จริง">
-              <StatTable rows={groupStats(trades, (t) => t.sessionTag || "ไม่ทราบ")} first="เซสชัน" />
+              <StatTable rows={groupStats(trades, (t) => t.sessionTag || "ไม่ทราบ")} first="เซสชัน" baht={baht} />
             </Panel>
 
             <Panel title="เทรดช่วงข่าว vs ไม่ใช่ช่วงข่าว" sub="นับว่าเปิดไม้ภายใน ±30 นาทีรอบข่าวใหญ่">
               <StatTable
                 rows={groupStats(trades, (t) => (t.newsTag ? "ช่วงข่าว" : "ไม่ใช่ช่วงข่าว"))}
                 first="ประเภท"
+                baht={baht}
               />
             </Panel>
 
             <Panel title="แยกตามระยะเวลาถือ">
-              <StatTable rows={groupStats(closed, HOLD_BUCKETS)} first="ถือนานแค่ไหน" />
+              <StatTable rows={groupStats(closed, HOLD_BUCKETS)} first="ถือนานแค่ไหน" baht={baht} />
             </Panel>
 
             <Panel title="แยกตามทิศทาง">
               <StatTable
                 rows={groupStats(trades, (t) => (t.side === "buy" ? "Buy" : "Sell"))}
                 first="ทิศทาง"
+                baht={baht}
               />
             </Panel>
           </div>
@@ -225,6 +266,9 @@ export default async function JournalPage() {
                           {t.profit >= 0 ? "+" : ""}
                           {t.profit}
                         </b>
+                        {baht.of(t.profit) !== null && (
+                          <div className="text-[11px] text-faint">{fmtThb(baht.of(t.profit)!, true)}</div>
+                        )}
                       </td>
                       <td className="py-2 text-[11.5px] text-faint">
                         {t.sessionTag}
