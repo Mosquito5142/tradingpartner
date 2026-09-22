@@ -144,9 +144,8 @@ npx vercel
 PF 2.87 · Expected Payoff 116.88 · Balance Drawdown Maximal 741.40 (23.35%) · 23 ไม้
 (DD กับ streak เราคำนวณเองจากเส้นกำไรสะสม ไม่ได้อ่านจากรายงาน แล้วได้ค่าตรงกัน)
 
-> ⚠️ เว็บนี้เปิดสาธารณะและไม่มีระบบล็อกอิน — ใครมีลิงก์ก็เห็นยอดเงินและประวัติเทรดได้
-> เลขบัญชีจึงแสดงแค่ 4 ตัวท้าย ถ้าไม่อยากให้ใครเห็นเลยควรตั้ง Password Protection
-> ใน Vercel (Settings → Deployment Protection)
+> เว็บเปิดสาธารณะโดยตั้งใจ (ไม่มีระบบล็อกอิน) เลขบัญชีจึงแสดงแค่ 4 ตัวท้าย
+> ถ้าวันหลังอยากปิด ตั้ง Password Protection ได้ที่ Vercel → Settings → Deployment Protection
 
 ### ทำไมต้องใช้ Wilson interval
 
