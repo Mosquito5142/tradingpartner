@@ -194,6 +194,34 @@ export async function alreadySent(ids: string[]): Promise<Set<string>> {
   return new Set(res.rows.map((r) => String(r.id)));
 }
 
+/**
+ * เคยส่งเรื่องนี้ไปเมื่อเร็ว ๆ นี้ไหม — ใช้กับการเตือนที่เกิดซ้ำได้ตลอด (สภาพตลาด)
+ *
+ * ต่างจาก alreadySent ที่กันซ้ำ "ตลอดไป" ต่อข่าวหนึ่งครั้ง
+ * สภาพตลาดกลับมาเป็นเหมือนเดิมได้เรื่อย ๆ จึงต้องกันด้วยช่วงเวลาแทน
+ */
+export async function sentWithin(id: string, withinSec: number, now = nowSec()): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  await ensureSchema();
+  const res = await db.execute({
+    sql: "SELECT 1 FROM alerts_sent WHERE id = ? AND sent_at > ? LIMIT 1",
+    args: [id, now - withinSec],
+  });
+  return res.rows.length > 0;
+}
+
+/** บันทึกการเตือนแบบทั่วไป — เขียนทับของเดิมเพื่อให้ cooldown เริ่มนับใหม่ */
+export async function markSentId(id: string, kind: string, now = nowSec()): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db.execute({
+    sql: `INSERT INTO alerts_sent (id, event_id, kind, event_ts, sent_at) VALUES (?,?,?,?,?)
+          ON CONFLICT(id) DO UPDATE SET sent_at = excluded.sent_at`,
+    args: [id, id, kind, now, now],
+  });
+}
+
 export async function markSent(alert: PendingAlert): Promise<void> {
   const db = getDb();
   if (!db) return;

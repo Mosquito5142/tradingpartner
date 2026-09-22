@@ -13,10 +13,45 @@
  */
 
 import { NextResponse } from "next/server";
+import { loadAccount } from "@/lib/account";
 import { isConfigured } from "@/lib/db";
+import { loadFx, supportsThb, toThb } from "@/lib/fx";
+import { buildLevels } from "@/lib/levels";
 import {
-  alreadySent, formatCard, isNotifyConfigured, LEAD_MIN, markSent, pendingAlerts, sendTelegram,
+  alreadySent, formatCard, isNotifyConfigured, LEAD_MIN, markSent, markSentId,
+  pendingAlerts, sendTelegram, sentWithin,
 } from "@/lib/notify";
+import { loadPrice } from "@/lib/price";
+import { readRegime } from "@/lib/regime";
+import { buildRegimeSignal, COOLDOWN_SEC, type RegimeSignal } from "@/lib/signal";
+
+/**
+ * สภาพตลาดรอบแนวรับแนวต้าน — ตรวจทุกครั้งที่ cron ยิงเข้ามา
+ *
+ * แยกจากการเตือนข่าวเพราะคนละเรื่องกัน: ข่าวมีเวลาแน่นอนและเตือนครั้งเดียวต่อข่าว
+ * ส่วนสภาพตลาดเกิดซ้ำได้ตลอด จึงกันซ้ำด้วย cooldown ผูกกับระดับแนว ไม่ใช่ผูกกับเวลา
+ */
+async function checkRegime(): Promise<{ signal: RegimeSignal | null; skipped: string }> {
+  const price = await loadPrice(Number(process.env.BROKER_OFFSET ?? -3.04)).catch(() => null);
+  if (!price) return { signal: null, skipped: "ดึงราคาไม่ได้" };
+
+  const levels = buildLevels(price.bars, price.price);
+  // ใช้ GC=F 60 วันเป็นฐานคำนวณ ชุดเดียวกับที่วัดสถิติไว้ (เหมือนหน้าหลัก)
+  const regime = readRegime(
+    price.profileBars.length >= 250 ? price.profileBars : price.bars,
+    levels,
+    price.price,
+  );
+
+  const [account, fx] = await Promise.all([loadAccount(), loadFx()]);
+  const balanceThb =
+    account?.balance != null && account.currency && supportsThb(account.currency)
+      ? toThb(account.balance, account.currency, fx.thbPerUsd)
+      : null;
+
+  const signal = buildRegimeSignal(regime, price.price, balanceThb, fx.thbPerUsd);
+  return { signal, skipped: signal ? "" : "สภาพยังไม่เข้าเงื่อนไข หรือราคายังไม่ใกล้แนว" };
+}
 
 /** ตัวอย่างข้อความ ใช้ตอน dry run ที่ไม่มีข่าวในหน้าต่าง */
 const sampleMessage = () =>
@@ -64,7 +99,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const pending = await pendingAlerts();
+    const [pending, regime] = await Promise.all([pendingAlerts(), checkRegime()]);
     // ไม่มี DB = กันซ้ำไม่ได้ ต้องบอกตรง ๆ ไม่ใช่เงียบแล้วปล่อยให้ผู้ใช้โดนสแปม
     const sentBefore = isConfigured() ? await alreadySent(pending.map((p) => p.id)) : new Set<string>();
     const todo = pending.filter((p) => !sentBefore.has(p.id));
@@ -79,7 +114,18 @@ export async function GET(request: Request) {
         // ไม่มีข่าวในหน้าต่างเป็นเรื่องปกติ (ส่วนใหญ่ของวันไม่มี) จึงโชว์ตัวอย่างไว้
         // ให้เห็นหน้าตาข้อความ ไม่งั้นแยกไม่ออกว่า "ไม่มีข่าว" กับ "พัง" ต่างกันยังไง
         ...(todo.length ? {} : { sample: sampleMessage() }),
+        regimeSignal: regime.signal?.text ?? null,
+        regimeSkipped: regime.skipped || undefined,
       });
+    }
+
+    let regimeSent: string | null = null;
+    if (regime.signal && !(await sentWithin(regime.signal.id, COOLDOWN_SEC))) {
+      const res = await sendTelegram(regime.signal.text);
+      if (res.ok) {
+        await markSentId(regime.signal.id, "regime");
+        regimeSent = regime.signal.id;
+      }
     }
 
     const results: { title: string; ok: boolean; error?: string }[] = [];
@@ -97,6 +143,7 @@ export async function GET(request: Request) {
       skippedAsSent: pending.length - todo.length,
       dedupe: isConfigured() ? "on" : "off (ไม่ได้ตั้งค่า Turso — อาจส่งซ้ำ)",
       results,
+      regime: regimeSent ?? (regime.signal ? "ส่งไปแล้วในรอบ cooldown" : regime.skipped),
     });
   } catch (err) {
     console.error("[api/cron/alert]", err);

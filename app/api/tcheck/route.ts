@@ -4,6 +4,8 @@ import { atr14, ema, readRegime } from "@/lib/regime";
 import { measure, MIN_SAMPLE } from "@/lib/reactions";
 import { detectCurrency, parseAccount } from "@/lib/mt5-import";
 import { equityCurve, lotProfile, wilson } from "@/lib/account";
+import { buildRegimeSignal, lotForBalance, NEAR_ATR, SIM } from "@/lib/signal";
+import type { Regime } from "@/lib/regime";
 import { fmtThb, supportsThb, toThb } from "@/lib/fx";
 import { analyseBehaviour, concentration, holdSplit, overlaps, reentryGaps } from "@/lib/behaviour";
 import type { Trade } from "@/lib/trades";
@@ -13,7 +15,9 @@ import {
 import type { ReactionRecord } from "@/lib/types";
 import { fetchGcf } from "@/lib/price";
 import { buildLevels } from "@/lib/levels";
-import { alertsFor, alreadySent, formatCard, isDue, LEAD_MIN, MIN_LEAD_MIN } from "@/lib/notify";
+import {
+  alertsFor, alreadySent, formatCard, isDue, LEAD_MIN, markSentId, MIN_LEAD_MIN, sentWithin,
+} from "@/lib/notify";
 import { getDb, isConfigured } from "@/lib/db";
 import type { AnnotatedEvent, Bar, Level } from "@/lib/types";
 import type { BriefingCard } from "@/lib/briefing";
@@ -453,6 +457,70 @@ export async function GET() {
   t("ล็อต: ค่ากลาง", lp?.median, 0.4);
   t("ล็อต: โตกว่าค่ากลางกี่เท่า", lp?.growth, 2.5);
   t("ล็อต: ไม่มีไม้ -> null", lotProfile([]), null);
+
+  // ---- แจ้งเตือนสภาพตลาด ----
+  const reg = (o: Partial<Regime> & { verdict: Regime["verdict"] }): Regime => ({
+    atr: 6, atrMedian: 6, atrPct: 20, historyDays: 70, highVol: false,
+    speed: 0.8, fast: false, ema200: 4300, aboveEma: false,
+    target: level(4350), approachUp: false, withTrend: true,
+    headlinePct: 68.8, factors: [], ...o,
+  });
+
+  t("เตือนสภาพ: ไม่มี regime -> null", buildRegimeSignal(null, 4348, 1000, 33), null);
+  t("เตือนสภาพ: สัญญาณขัดกันเอง -> ไม่ส่ง",
+    buildRegimeSignal(reg({ verdict: "mixed" }), 4348, 1000, 33), null);
+  t("เตือนสภาพ: ไม่มีแนวข้างหน้า -> ไม่ส่ง",
+    buildRegimeSignal(reg({ verdict: "hold", target: null }), 4348, 1000, 33), null);
+  t(`เตือนสภาพ: ราคาไกลเกิน ${NEAR_ATR} ATR -> ไม่ส่ง`,
+    buildRegimeSignal(reg({ verdict: "hold", atr: 6 }), 4350 - 6 * NEAR_ATR - 0.1, 1000, 33), null);
+
+  const hold = buildRegimeSignal(reg({ verdict: "hold" }), 4348, 1939, 33.258);
+  t("เตือนสภาพ: ใกล้พอ -> ส่ง", hold !== null, true);
+  t("เตือนสภาพ: ชนิด hold", hold?.kind, "hold");
+  t("เตือนสภาพ: id ผูกกับระดับแนว ไม่ใช่เวลา", hold?.id, "regime:hold:4350");
+  t("เตือนสภาพ: บอกว่าช่วงยังคร่อมศูนย์",
+    hold?.text.includes("ยังคร่อมศูนย์") ?? false, true);
+  t("เตือนสภาพ: ไม่ใช้คำสั่งซื้อขาย",
+    /ให้ซื้อ|ให้ขาย|แนะนำให้/.test(hold?.text ?? ""), false);
+  t("เตือนสภาพ: มีข้อความว่าไม่ใช่คำแนะนำการลงทุน",
+    hold?.text.includes("ไม่ใช่คำแนะนำการลงทุน") ?? false, true);
+  t("เตือนสภาพ: อ้าง SL/TP ที่ตรงกับตอนวัด",
+    hold?.text.includes(`SL $${SIM.sl} / TP $${SIM.tp}`) ?? false, true);
+
+  const brk = buildRegimeSignal(reg({ verdict: "break", fast: true, speed: 2.3 }), 4348, 1939, 33.258);
+  t("เตือนสภาพ: ชนิด break", brk?.kind, "break");
+  t("เตือนสภาพ: break บอกว่าเสียเปรียบ", brk?.text.includes("เสียเปรียบ") ?? false, true);
+  t("เตือนสภาพ: break ใช้สถิติฝั่งลบ", brk?.text.includes("-2.60") ?? false, true);
+
+  t("เตือนสภาพ: ไม่รู้ยอดเงินก็ยังส่งได้ แค่ไม่มีเลขบาท",
+    buildRegimeSignal(reg({ verdict: "hold" }), 4348, null, 33)?.text.includes("ตามสูตรของคุณ") ?? true,
+    false);
+
+  // ---- สูตรขนาดไม้ของผู้ใช้ ----
+  t("ล็อตตามสูตร: 300 บาท", lotForBalance(300).lots, "0.5");
+  t("ล็อตตามสูตร: 1000 บาท (ขอบบนชั้นแรก)", lotForBalance(1000).lots, "0.5");
+  t("ล็อตตามสูตร: 1001 บาท", lotForBalance(1001).lots, "1–1.5");
+  t("ล็อตตามสูตร: 3000 บาท", lotForBalance(3000).lots, "1–1.5");
+  t("ล็อตตามสูตร: 3001 บาท", lotForBalance(3001).lots, "2");
+  t("ล็อตตามสูตร: ยอดมหาศาลก็ยังมีชั้นรองรับ", lotForBalance(1e9).lots, "2");
+
+  // ---- cooldown ของการเตือนสภาพตลาด (แตะฐานข้อมูลจริง แล้วลบทิ้ง) ----
+  if (isConfigured() && db) {
+    const rid = `regime:test:${Date.now()}`;
+    try {
+      t("cooldown: ยังไม่เคยส่ง", await sentWithin(rid, 3600), false);
+      await markSentId(rid, "regime");
+      t("cooldown: ส่งแล้วต้องติด cooldown", await sentWithin(rid, 3600), true);
+      t("cooldown: พ้นช่วงแล้วส่งได้อีก", await sentWithin(rid, 0), false);
+      // ส่งซ้ำ id เดิมต้องไม่ทำให้แถวซ้ำ แค่ขยับเวลา
+      await markSentId(rid, "regime");
+      const rows = await db.execute({ sql: "SELECT COUNT(*) n FROM alerts_sent WHERE id = ?", args: [rid] });
+      t("cooldown: ไม่เกิดแถวซ้ำ", Number(rows.rows[0]?.n), 1);
+    } finally {
+      await db.execute({ sql: "DELETE FROM alerts_sent WHERE id = ?", args: [rid] });
+    }
+    t("cooldown: ลบข้อมูลทดสอบแล้ว", await sentWithin(rid, 3600), false);
+  }
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(
