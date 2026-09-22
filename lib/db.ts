@@ -96,6 +96,25 @@ CREATE TABLE IF NOT EXISTS alerts_sent (
   sent_at  INTEGER NOT NULL DEFAULT (unixepoch())
 )`;
 
+/**
+ * ข้อมูลบัญชีจากหัวรายงาน
+ *
+ * มีไว้เพื่อเลิก hardcode ยอดเงินในโค้ด — ยอดเปลี่ยนทุกครั้งที่เทรด
+ * ค่าที่ฝังไว้จึงล้าสมัยทันทีและทำให้ %เสี่ยงทั้งหน้าผิดตาม
+ */
+const ACCOUNT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS account (
+  id         TEXT PRIMARY KEY,
+  currency   TEXT NOT NULL DEFAULT '',
+  server     TEXT NOT NULL DEFAULT '',
+  company    TEXT NOT NULL DEFAULT '',
+  kind       TEXT NOT NULL DEFAULT '',
+  mode       TEXT NOT NULL DEFAULT '',
+  balance    REAL,
+  equity     REAL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+)`;
+
 const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_reactions_key ON reactions(key)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_ts ON reactions(ts)",
@@ -134,6 +153,7 @@ export async function ensureSchema(): Promise<void> {
       await db.execute(SCHEMA);
       await db.execute(TRADES_SCHEMA);
       await db.execute(ALERTS_SCHEMA);
+      await db.execute(ACCOUNT_SCHEMA);
       for (const sql of MIGRATIONS) {
         try {
           await db.execute(sql);

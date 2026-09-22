@@ -43,6 +43,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/journal" className="rounded-md px-3 py-1.5 text-muted hover:bg-raise hover:text-text">
                 สมุดเทรด
               </Link>
+              <Link href="/profile" className="rounded-md px-3 py-1.5 text-muted hover:bg-raise hover:text-text">
+                โปรไฟล์
+              </Link>
             </nav>
           </div>
         </header>

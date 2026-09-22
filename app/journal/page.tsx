@@ -1,6 +1,7 @@
 import BehaviourPanel from "@/components/BehaviourPanel";
 import TradeImport from "@/components/TradeImport";
 import { Banner, Panel } from "@/components/ui";
+import { loadAccount } from "@/lib/account";
 import { analyseBehaviour } from "@/lib/behaviour";
 import { isConfigured } from "@/lib/db";
 import { fmtThb, loadFx, supportsThb, toThb } from "@/lib/fx";
@@ -14,13 +15,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "สมุดบันทึกเทรด" };
 
-/**
- * ยอดเงินในบัญชี ณ การนำเข้าครั้งล่าสุด
- *
- * ใช้ทั้งเป็นค่าเริ่มต้นของฟอร์มและเป็นตัวหารของ %เสี่ยง — ต้องเป็นค่าเดียวกัน
- * ไม่งั้นตัวเลขสองที่บนหน้าเดียวกันจะขัดกันเอง
- */
-const ACCOUNT_BALANCE = 1618.1;
+/** ใช้เมื่อยังไม่เคยนำเข้าไฟล์ที่มีหัวรายงาน — ปกติจะอ่านยอดจริงจากฐานข้อมูลแทน */
+const FALLBACK_BALANCE = 1000;
 
 interface Baht {
   /** null = ยังแปลงไม่ได้ (ไม่รู้สกุลเงินของบัญชี) */
@@ -128,19 +124,21 @@ export default async function JournalPage() {
     );
   }
 
-  const [trades, fx] = await Promise.all([allTrades(), loadFx()]);
+  const [trades, fx, account] = await Promise.all([allTrades(), loadFx(), loadAccount()]);
+  // ยอดเงินมาจากหัวรายงานที่นำเข้าล่าสุด — ไม่ฝังไว้ในโค้ดเพราะเปลี่ยนทุกครั้งที่เทรด
+  const balance = account?.balance ?? FALLBACK_BALANCE;
   const total = summarize(trades);
   const closed = trades.filter((t) => t.closeTs !== null);
 
   // แปลงได้ต่อเมื่อรู้สกุลเงินของบัญชีจริง ๆ — เดาว่าเป็น USD แล้วผิดจะคลาดไป 100 เท่า
-  const currency = accountCurrency(trades);
+  const currency = account?.currency || accountCurrency(trades);
   const canThb = Boolean(currency) && supportsThb(currency);
   const baht = { of: (amount: number) => (canThb ? toThb(amount, currency, fx.thbPerUsd) : null) };
   const behaviour = analyseBehaviour(trades);
 
   return (
     <div className="flex flex-col gap-5">
-      <TradeImport defaultBalance={ACCOUNT_BALANCE} />
+      <TradeImport defaultBalance={balance} />
 
       {!trades.length ? (
         <Panel title="ยังไม่มีไม้ในสมุด">
@@ -202,7 +200,7 @@ export default async function JournalPage() {
             title="รูปแบบการเล่นของคุณ"
             sub="อ่านได้ตั้งแต่ไม้ไม่กี่ไม้ เพราะเป็นคำบรรยายสิ่งที่ทำไปแล้ว ไม่ใช่การประมาณค่าขอบได้เปรียบ"
           >
-            <BehaviourPanel b={behaviour} balance={ACCOUNT_BALANCE} unit={currency || "หน่วยบัญชี"} />
+            <BehaviourPanel b={behaviour} balance={balance} unit={currency || "หน่วยบัญชี"} />
           </Panel>
 
           <Panel

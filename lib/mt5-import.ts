@@ -26,8 +26,24 @@ export interface ParsedTrade {
   comment: string;
 }
 
+/** ข้อมูลบัญชีจากหัวรายงาน — ทำให้ไม่ต้อง hardcode ยอดเงินไว้ในโค้ด */
+export interface AccountInfo {
+  id: string;
+  currency: string;
+  server: string;
+  company: string;
+  /** real / demo */
+  kind: string;
+  /** Hedge / Netting */
+  mode: string;
+  balance: number | null;
+  equity: number | null;
+}
+
 export interface ParseResult {
   trades: ParsedTrade[];
+  /** null เมื่อไฟล์ไม่มีหัวรายงานให้อ่าน (เช่น CSV ดิบ) */
+  account: AccountInfo | null;
   /**
    * สกุลเงินของบัญชี ดึงจากหัวรายงาน — ว่างถ้าหาไม่เจอ
    * สำคัญเพราะบัญชี cent (USC) ต่างจาก USD อยู่ 100 เท่า ถ้าเดาผิดตัวเลขบาทจะเพี้ยนหนัก
@@ -73,6 +89,61 @@ export function detectCurrency(text: string): string {
   const labelled = /(?:currency|สกุลเงิน)\s*[:：]?\s*([A-Z]{3})\b/i.exec(flat);
   if (labelled) return labelled[1].toUpperCase();
   return "";
+}
+
+/** ข้อความล้วนของทั้งไฟล์ ใช้หาข้อมูลที่อยู่นอกตาราง */
+function flatten(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/<[^>]+>/g, "\n")
+    .replace(/[^\S\n]+/g, " ");
+}
+
+/**
+ * ค่าที่อยู่ถัดจากป้ายกำกับ — MT5 วางป้ายกับค่าไว้คนละเซลล์
+ *
+ * ระหว่างป้ายกับค่ามักมีเซลล์ว่าง (ที่กลายเป็นบรรทัดมีแต่ช่องว่าง) คั่นอยู่
+ * จึงต้องข้ามไปจนเจออักขระจริงตัวแรก — ถ้าจับบรรทัดว่างมาจะได้ค่าว่างเปล่า
+ *
+ * เครื่องหมาย ":" บังคับต้องมี ไม่ใช่ optional — ในไฟล์มีคำว่า "Balance" ลอย ๆ
+ * อยู่ก่อนหน้าป้ายจริง ถ้าปล่อยให้ไม่มีโคลอนก็ได้ จะไปแมตช์ตัวนั้นแล้วได้ค่าว่าง
+ */
+function labelled(flat: string, label: string): string {
+  const re = new RegExp(`^ *${label} *: *$\\s*?\\n\\s*(\\S.*?) *$`, "mi");
+  const m = re.exec(flat);
+  return m ? m[1].trim() : "";
+}
+
+/**
+ * อ่านข้อมูลบัญชีจากหัวรายงาน
+ *
+ * MT5: "183875989 (USC, Exness-MT5Real25, real, Hedge)" ใต้ป้าย "Account:"
+ * ทุกช่องเป็น optional — ไฟล์บางรูปแบบไม่มีหัวรายงานเลย
+ */
+export function parseAccount(text: string): AccountInfo | null {
+  const flat = flatten(text);
+  const line = labelled(flat, "Account");
+  const money = (raw: string) => {
+    const n = toNumber(raw);
+    return n === null ? null : n;
+  };
+
+  const m = /^(\S+)\s*\(([^)]*)\)/.exec(line);
+  if (!m && !line) return null;
+
+  const parts = (m?.[2] ?? "").split(",").map((p) => p.trim());
+  const info: AccountInfo = {
+    id: m?.[1] ?? line,
+    currency: parts[0]?.toUpperCase() ?? "",
+    server: parts[1] ?? "",
+    company: labelled(flat, "Company"),
+    kind: parts[2] ?? "",
+    mode: parts[3] ?? "",
+    balance: money(labelled(flat, "Balance")),
+    equity: money(labelled(flat, "Equity")),
+  };
+  // ไม่มีอะไรเลยนอกจากเลขบัญชี = อ่านไม่ได้จริง อย่าเก็บขยะลงฐานข้อมูล
+  return info.id || info.balance !== null ? info : null;
 }
 
 function stripTags(html: string): string {
@@ -198,19 +269,20 @@ function findHeaderRow(rows: string[][]): { index: number; map: Record<string, n
 
 export function parseStatement(text: string, serverOffsetHours = 7): ParseResult {
   const warnings: string[] = [];
-  const currency = detectCurrency(text);
+  const account = parseAccount(text);
+  const currency = account?.currency || detectCurrency(text);
   const isHtml = /<\s*table/i.test(text) || /<\s*tr[\s>]/i.test(text);
   const rows = isHtml ? rowsFromHtml(text) : rowsFromDelimited(text);
   const format: ParseResult["format"] = isHtml ? "html" : rows.length ? "csv" : "unknown";
 
   if (!rows.length) {
-    return { trades: [], currency, skipped: 0, headers: [], format: "unknown",
+    return { trades: [], account, currency, skipped: 0, headers: [], format: "unknown",
       warnings: ["อ่านไฟล์ไม่ออก — ไม่เจอตารางหรือบรรทัดข้อมูลเลย"] };
   }
 
   const header = findHeaderRow(rows);
   if (!header) {
-    return { trades: [], currency, skipped: rows.length, headers: rows[0] ?? [], format,
+    return { trades: [], account, currency, skipped: rows.length, headers: rows[0] ?? [], format,
       warnings: ["ไม่เจอหัวตารางที่มีคอลัมน์ เวลา/ประเภท/กำไร ครบ — ไฟล์อาจเป็นรูปแบบที่ยังไม่รองรับ"] };
   }
 
@@ -287,5 +359,5 @@ export function parseStatement(text: string, serverOffsetHours = 7): ParseResult
     warnings.push("ไม่เจอสกุลเงินของบัญชีในไฟล์ — จะแปลงเป็นเงินบาทให้ไม่ได้");
   }
 
-  return { trades, currency, skipped, headers, format, warnings };
+  return { trades, account, currency, skipped, headers, format, warnings };
 }

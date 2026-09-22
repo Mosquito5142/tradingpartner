@@ -2,7 +2,8 @@ import { phaseOf, pollFor, pickFocus, worthWatching, IMMINENT_MIN, WATCH_AFTER_M
 import { EDGE_WINDOW_MIN } from "@/lib/briefing";
 import { atr14, ema, readRegime } from "@/lib/regime";
 import { measure, MIN_SAMPLE } from "@/lib/reactions";
-import { detectCurrency } from "@/lib/mt5-import";
+import { detectCurrency, parseAccount } from "@/lib/mt5-import";
+import { equityCurve, lotProfile, wilson } from "@/lib/account";
 import { fmtThb, supportsThb, toThb } from "@/lib/fx";
 import { analyseBehaviour, concentration, holdSplit, overlaps, reentryGaps } from "@/lib/behaviour";
 import type { Trade } from "@/lib/trades";
@@ -399,6 +400,59 @@ export async function GET() {
   // ถือรวม 0.8 ล็อต · ราคาสวน $20 -> 20 x 0.8 x 100 = 1600
   t("พฤติกรรม: ขาดทุนถ้าราคาสวน $20", beh?.shockLoss, 1600);
   t("พฤติกรรม: ไม้แย่สุด", beh?.worstLoss, -20);
+
+  // ---- อ่านข้อมูลบัญชีจากหัวรายงาน ----
+  const acc = parseAccount(
+    "<td>Account:</td><td>7654321 (USC, Exness-MT5Real25, real, Hedge)</td>" +
+    "<td>Company:</td><td>Exness Technologies Ltd</td><td>Balance:</td><td>2 890.60</td>",
+  );
+  t("บัญชี: เลขบัญชี", acc?.id, "7654321");
+  t("บัญชี: สกุลเงิน", acc?.currency, "USC");
+  t("บัญชี: เซิร์ฟเวอร์", acc?.server, "Exness-MT5Real25");
+  t("บัญชี: ประเภท", `${acc?.kind} ${acc?.mode}`, "real Hedge");
+  t("บัญชี: ยอดเงิน (มีช่องว่างคั่นหลักพัน)", acc?.balance, 2890.6);
+  t("บัญชี: ไม่มีหัวรายงาน -> null", parseAccount("Ticket,Type"), null);
+  // "Balance" ลอย ๆ ที่ไม่มีโคลอนต้องไม่ถูกจับมาเป็นป้าย
+  t("บัญชี: ข้ามคำว่า Balance ที่ไม่ใช่ป้าย",
+    parseAccount("<td>Balance</td><td>xx</td><td>Account:</td><td>1 (USD, S, real, Net)</td>" +
+                 "<td>Balance:</td><td>500.00</td>")?.balance, 500);
+
+  // ---- ช่วงความเชื่อมั่นของอัตราชนะ (Wilson) ----
+  t("wilson: 15/22 คร่อม 50%", wilson(15, 22).map((x) => x > 50), [false, true]);
+  t("wilson: ชนะหมดก็ไม่เกิน 100%", wilson(5, 5)[1] <= 100, true);
+  t("wilson: แพ้หมดก็ไม่ต่ำกว่า 0%", wilson(0, 5)[0] >= 0, true);
+  t("wilson: n มากขึ้นช่วงต้องแคบลง",
+    wilson(60, 100)[1] - wilson(60, 100)[0] < wilson(6, 10)[1] - wilson(6, 10)[0], true);
+  t("wilson: ไม่มีข้อมูล", wilson(0, 0), [0, 0]);
+
+  // ---- เส้นกำไรสะสม / การถอย ----
+  // ทุน 1000 -> +500 (peak 1500) -> -300 -> -200 (ต่ำสุด 1000) -> +100
+  const curve = equityCurve([
+    trade({ openMin: 0, closeMin: 1, profit: 500 }),
+    trade({ openMin: 2, closeMin: 3, profit: -300 }),
+    trade({ openMin: 4, closeMin: 5, profit: -200 }),
+    trade({ openMin: 6, closeMin: 7, profit: 100 }),
+  ], 1000);
+  t("เส้นทุน: ถอยจากยอดสูงสุด", curve.maxDrawdown, 500);
+  t("เส้นทุน: คิดเป็น % ของยอดสูงสุด", curve.maxDrawdownPct, 33.3);
+  t("เส้นทุน: แพ้ติดกันมากสุด", curve.longestLossStreak, 2);
+  t("เส้นทุน: ชนะติดกันมากสุด", curve.longestWinStreak, 1);
+  t("เส้นทุน: เรียงตามเวลาปิด ไม่ใช่เวลาเปิด",
+    equityCurve([
+      trade({ openMin: 0, closeMin: 100, profit: 10 }),
+      trade({ openMin: 5, closeMin: 10, profit: -5 }),
+    ], 0).curve.map((c) => c.cum), [-5, 5]);
+
+  // ---- ขนาดล็อต ----
+  const lp = lotProfile([
+    trade({ openMin: 0, closeMin: 1, profit: 1, lots: 0.4 }),
+    trade({ openMin: 2, closeMin: 3, profit: 1, lots: 0.4 }),
+    trade({ openMin: 4, closeMin: 5, profit: 1, lots: 1 }),
+  ]);
+  t("ล็อต: ล่าสุด", lp?.latest, 1);
+  t("ล็อต: ค่ากลาง", lp?.median, 0.4);
+  t("ล็อต: โตกว่าค่ากลางกี่เท่า", lp?.growth, 2.5);
+  t("ล็อต: ไม่มีไม้ -> null", lotProfile([]), null);
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(

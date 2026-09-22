@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { isConfigured } from "@/lib/db";
 import { parseStatement, type ParsedTrade } from "@/lib/mt5-import";
 import { accountCurrency, allTrades, saveTrades, tagTrades } from "@/lib/trades";
+import { loadAccount, saveAccount } from "@/lib/account";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
       }
       parsed = [one];
       // กรอกมือไม่มีสกุลเงินมาด้วย — ใช้ของบัญชีที่นำเข้าไว้แล้ว ไม่งั้นแปลงเป็นบาทไม่ได้
-      currency = accountCurrency(await allTrades());
+      currency = (await loadAccount())?.currency || accountCurrency(await allTrades());
     } else if (body.text) {
       const result = parseStatement(body.text, body.serverOffsetHours ?? 7);
       parsed = result.trades;
@@ -92,6 +93,8 @@ export async function POST(request: Request) {
       headers = result.headers;
       format = result.format;
       currency = result.currency;
+      // เก็บยอดเงิน/ข้อมูลบัญชีไว้ใช้ทั้งเว็บ แทนที่จะให้ผู้ใช้กรอกซ้ำทุกหน้า
+      if (result.account) await saveAccount(result.account);
     } else {
       return NextResponse.json({ ok: false, error: "ไม่มีข้อมูลส่งมา" }, { status: 400 });
     }
@@ -101,7 +104,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "ไม่พบไม้เทรดในไฟล์", warnings, headers, format });
     }
 
-    const tagged = await tagTrades(parsed, body.balance, currency);
+    // ยอดเงินจากหัวรายงานแม่นกว่าที่ผู้ใช้กรอกเอง เพราะเป็นค่า ณ เวลาที่ export
+    const balance = body.balance ?? (await loadAccount())?.balance ?? undefined;
+    const tagged = await tagTrades(parsed, balance ?? undefined, currency);
     const saved = await saveTrades(tagged);
 
     return NextResponse.json({
