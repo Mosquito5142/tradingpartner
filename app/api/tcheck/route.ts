@@ -5,6 +5,7 @@ import { measure, MIN_SAMPLE } from "@/lib/reactions";
 import { detectCurrency, parseAccount } from "@/lib/mt5-import";
 import { equityCurve, lotProfile, wilson } from "@/lib/account";
 import { buildRegimeSignal, lotForBalance, NEAR_ATR, SIM } from "@/lib/signal";
+import { canSend, DEFAULTS, isSettingKey, KEYS } from "@/lib/settings";
 import type { Regime } from "@/lib/regime";
 import { fmtThb, supportsThb, toThb } from "@/lib/fx";
 import { analyseBehaviour, concentration, holdSplit, overlaps, reentryGaps } from "@/lib/behaviour";
@@ -521,6 +522,22 @@ export async function GET() {
     }
     t("cooldown: ลบข้อมูลทดสอบแล้ว", await sentWithin(rid, 3600), false);
   }
+
+  // ---- สวิตช์เปิด/ปิดการแจ้งเตือน ----
+  t("ตั้งค่า: ค่าเริ่มต้นเปิดหมด", DEFAULTS, { enabled: true, news: true, regime: true });
+  t("ตั้งค่า: คีย์ที่ยอมรับ", Object.keys(KEYS).sort(), ["enabled", "news", "regime"]);
+  t("ตั้งค่า: คีย์มั่วถูกปฏิเสธ", isSettingKey("hack"), false);
+  t("ตั้งค่า: คีย์ถูกต้องผ่าน", isSettingKey("news"), true);
+
+  t("สวิตช์: เปิดหมด -> ส่งได้ทั้งคู่",
+    [canSend({ enabled: true, news: true, regime: true }, "news"),
+     canSend({ enabled: true, news: true, regime: true }, "regime")], [true, true]);
+  t("สวิตช์: ปิดใหญ่ -> ไม่ส่งอะไรเลยแม้ตัวย่อยเปิด",
+    [canSend({ enabled: false, news: true, regime: true }, "news"),
+     canSend({ enabled: false, news: true, regime: true }, "regime")], [false, false]);
+  t("สวิตช์: ปิดเฉพาะสภาพตลาด ข่าวยังส่ง",
+    [canSend({ enabled: true, news: true, regime: false }, "news"),
+     canSend({ enabled: true, news: true, regime: false }, "regime")], [true, false]);
 
   const pass = out.filter((r) => r[1]).length;
   return new Response(

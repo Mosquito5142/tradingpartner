@@ -23,6 +23,7 @@ import {
 } from "@/lib/notify";
 import { loadPrice } from "@/lib/price";
 import { readRegime } from "@/lib/regime";
+import { canSend, loadNotifySettings } from "@/lib/settings";
 import { buildRegimeSignal, COOLDOWN_SEC, type RegimeSignal } from "@/lib/signal";
 
 /**
@@ -88,7 +89,14 @@ export async function GET(request: Request) {
     const res = await sendTelegram(
       "✅ <b>ทดสอบการเชื่อมต่อ</b>\nบอทแจ้งเตือนข่าวทองตั้งค่าถูกต้องแล้ว",
     );
-    return NextResponse.json({ ok: res.ok, mode: "test", error: res.error }, { status: res.ok ? 200 : 502 });
+    const st = await loadNotifySettings();
+    return NextResponse.json(
+      {
+        ok: res.ok, mode: "test", error: res.error, settings: st,
+        note: st.enabled ? undefined : "หมายเหตุ: ปิดการแจ้งเตือนไว้ — ข้อความทดสอบยังส่งได้ แต่การเตือนอัตโนมัติจะไม่ส่ง",
+      },
+      { status: res.ok ? 200 : 502 },
+    );
   }
 
   if (!dry && !isNotifyConfigured()) {
@@ -99,7 +107,18 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [pending, regime] = await Promise.all([pendingAlerts(), checkRegime()]);
+    const settings = await loadNotifySettings();
+    // ปิดสวิตช์ใหญ่แล้วไม่ต้องไปดึงราคา/ปฏิทินให้เปลือง
+    if (!settings.enabled) {
+      return NextResponse.json({
+        ok: true, sent: 0, skipped: "ปิดการแจ้งเตือนไว้ (สวิตช์ใหญ่)", settings,
+      });
+    }
+
+    const [pending, regime] = await Promise.all([
+      canSend(settings, "news") ? pendingAlerts() : Promise.resolve([]),
+      canSend(settings, "regime") ? checkRegime() : Promise.resolve({ signal: null, skipped: "ปิดการเตือนสภาพตลาดไว้" }),
+    ]);
     // ไม่มี DB = กันซ้ำไม่ได้ ต้องบอกตรง ๆ ไม่ใช่เงียบแล้วปล่อยให้ผู้ใช้โดนสแปม
     const sentBefore = isConfigured() ? await alreadySent(pending.map((p) => p.id)) : new Set<string>();
     const todo = pending.filter((p) => !sentBefore.has(p.id));
@@ -110,6 +129,7 @@ export async function GET(request: Request) {
         found: pending.length, skippedAsSent: pending.length - todo.length,
         dedupe: isConfigured() ? "on" : "off (ไม่ได้ตั้งค่า Turso)",
         telegram: isNotifyConfigured() ? "ตั้งค่าแล้ว" : "ยังไม่ได้ตั้งค่า",
+        settings,
         wouldSend: todo.map((p) => ({ title: p.title, minutesLeft: p.minutesLeft, text: p.text })),
         // ไม่มีข่าวในหน้าต่างเป็นเรื่องปกติ (ส่วนใหญ่ของวันไม่มี) จึงโชว์ตัวอย่างไว้
         // ให้เห็นหน้าตาข้อความ ไม่งั้นแยกไม่ออกว่า "ไม่มีข่าว" กับ "พัง" ต่างกันยังไง
@@ -144,6 +164,7 @@ export async function GET(request: Request) {
       dedupe: isConfigured() ? "on" : "off (ไม่ได้ตั้งค่า Turso — อาจส่งซ้ำ)",
       results,
       regime: regimeSent ?? (regime.signal ? "ส่งไปแล้วในรอบ cooldown" : regime.skipped),
+      settings,
     });
   } catch (err) {
     console.error("[api/cron/alert]", err);

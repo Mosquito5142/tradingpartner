@@ -4,7 +4,9 @@ import { equityCurve, loadAccount, lotProfile, wilson } from "@/lib/account";
 import { analyseBehaviour, SHOCK_MOVE } from "@/lib/behaviour";
 import { isConfigured } from "@/lib/db";
 import { fmtThb, loadFx, supportsThb, toThb } from "@/lib/fx";
+import NotifyToggles from "@/components/NotifyToggles";
 import { isNotifyConfigured } from "@/lib/notify";
+import { loadNotifySettings } from "@/lib/settings";
 import { allRecords } from "@/lib/reactions";
 import { thDateTime } from "@/lib/time";
 import { accountCurrency, allTrades, summarize } from "@/lib/trades";
@@ -48,8 +50,8 @@ export default async function ProfilePage() {
     );
   }
 
-  const [trades, account, fx, records] = await Promise.all([
-    allTrades(), loadAccount(), loadFx(), allRecords(),
+  const [trades, account, fx, records, notify] = await Promise.all([
+    allTrades(), loadAccount(), loadFx(), allRecords(), loadNotifySettings(),
   ]);
 
   if (!trades.length && !account) {
@@ -250,6 +252,10 @@ export default async function ProfilePage() {
         )}
       </Panel>
 
+      <Panel title="แจ้งเตือน" sub="เปิด/ปิดได้ทันที มีผลกับ cron ที่ส่งจริงเลย ไม่ต้อง deploy ใหม่">
+        <NotifyToggles initial={notify} configured={isNotifyConfigured()} />
+      </Panel>
+
       <Panel title="สิ่งที่ควรรู้" sub="สรุปจากแผงอื่นในเว็บ กดเข้าไปดูรายละเอียดได้">
         <div className="flex flex-col gap-1">
           {behaviour && (
@@ -276,7 +282,15 @@ export default async function ProfilePage() {
           <Line k="คลังสถิติข่าว" v={`${records.length} รายการ`} />
           <Line
             k="แจ้งเตือน Telegram"
-            v={isNotifyConfigured() ? <span className="text-up">เปิดใช้งาน</span> : <span className="text-faint">ยังไม่ได้ตั้งค่า</span>}
+            v={
+              !isNotifyConfigured() ? (
+                <span className="text-faint">ยังไม่ได้ตั้งค่า</span>
+              ) : notify.enabled ? (
+                <span className="text-up">เปิดอยู่</span>
+              ) : (
+                <span className="text-[#ffb38a]">ปิดไว้</span>
+              )
+            }
           />
         </div>
         <div className="mt-3 flex flex-wrap gap-2 text-[12.5px]">

@@ -115,6 +115,17 @@ CREATE TABLE IF NOT EXISTS account (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 )`;
 
+/**
+ * ค่าตั้งค่าของผู้ใช้ — เก็บฝั่งเซิร์ฟเวอร์ ไม่ใช่ localStorage
+ * เพราะ cron ที่ส่ง Telegram รันบนเซิร์ฟเวอร์ ต้องอ่านสวิตช์เปิด/ปิดได้เอง
+ */
+const SETTINGS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+)`;
+
 const INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_reactions_key ON reactions(key)",
   "CREATE INDEX IF NOT EXISTS idx_reactions_ts ON reactions(ts)",
@@ -154,6 +165,7 @@ export async function ensureSchema(): Promise<void> {
       await db.execute(TRADES_SCHEMA);
       await db.execute(ALERTS_SCHEMA);
       await db.execute(ACCOUNT_SCHEMA);
+      await db.execute(SETTINGS_SCHEMA);
       for (const sql of MIGRATIONS) {
         try {
           await db.execute(sql);
