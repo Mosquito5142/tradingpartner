@@ -40,10 +40,15 @@ export default function RegimeBand({ regime }: { regime: Regime | null }) {
       </div>
 
       <p className={`mt-0.5 text-[13.5px] leading-relaxed text-[#c7cdd8]`}>
-        ราคากำลังวิ่ง<b>{regime.approachUp ? "ขึ้น" : "ลง"}</b>
+        {regime.approach === "flat" ? (
+          <>ราคา<b>ทรงตัว</b> (ขยับไม่ถึง 0.1 ATR ใน 15–30 นาที) แนวที่ใกล้ที่สุดคือ</>
+        ) : (
+          <>ราคากำลังวิ่ง<b>{regime.approachUp ? "ขึ้น" : "ลง"}</b></>
+        )}
         {regime.target ? (
           <>
-            {" "}เข้าหา{regime.target.side === "resistance" ? "แนวต้าน" : "แนวรับ"}{" "}
+            {regime.approach === "flat" ? " " : " เข้าหา"}
+            {regime.target.side === "resistance" ? "แนวต้าน" : "แนวรับ"}{" "}
             <b className={`tnum ${regime.target.side === "resistance" ? "text-down" : "text-up"}`}>
               {regime.target.price.toLocaleString()}
             </b>{" "}

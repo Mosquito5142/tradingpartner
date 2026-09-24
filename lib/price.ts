@@ -76,6 +76,20 @@ interface YahooChart {
  * แท่งเทียนทองล่วงหน้า COMEX
  * ขอบเขตที่ Yahoo ให้ (ทดสอบแล้ว): 1m=7วัน · 5m=60วัน · 15m=60วัน · 1h=2ปี
  */
+/**
+ * ตัดแท่งที่ timestamp ซ้ำ เก็บตัวที่มาทีหลัง
+ *
+ * Yahoo ส่งแท่งที่ยังไม่ปิดมาซ้ำ timestamp เดียวกับแท่งล่าสุด (เจอจริง: 14:45 สองครั้ง)
+ * ถ้าไม่ตัด การนับย้อน "8 แท่ง = 2 ชั่วโมง" จะเหลือ 7 แท่งจริง
+ * และการเทียบแท่งล่าสุดกับแท่งก่อนหน้าจะกลายเป็นเทียบแท่งเดียวกับตัวเอง
+ * เก็บตัวหลังเพราะเป็นข้อมูลที่ใหม่กว่า
+ */
+export function dedupeBars(bars: Bar[]): Bar[] {
+  const byTs = new Map<number, Bar>();
+  for (const b of bars) byTs.set(b.ts, b);
+  return [...byTs.values()].sort((a, b) => a.ts - b.ts);
+}
+
 export async function fetchGcf(interval = "15m", range = "60d"): Promise<Bar[]> {
   const data = await getJson<YahooChart>(`${GCF_URL}?interval=${interval}&range=${range}`, 40_000, TTL.history);
   const result = data.chart.result[0];
@@ -87,7 +101,21 @@ export async function fetchGcf(interval = "15m", range = "60d"): Promise<Bar[]> 
     if (h === null || l === null || c === null) return;
     bars.push({ ts, o: o ?? c, h, l, c });
   });
-  return bars.sort((a, b) => a.ts - b.ts);
+  return dedupeBars(bars);
+}
+
+/**
+ * ราคาสดกับราคาอ้างอิงเมื่อ 15–30 นาทีก่อน ในสเกลโบรกเกอร์ — ใช้ตัดสินทิศทางตอนนี้
+ *
+ * แท่งสุดท้ายคือแท่งที่ยังไม่ปิด (ราคาสด) จึงข้ามแท่งที่เพิ่งปิดไปใช้แท่งก่อนหน้านั้นอีกแท่ง
+ * ถ้าใช้แท่งที่เพิ่งปิด ช่วงต้นแท่งใหม่ราคายังไม่ทันขยับ ผลต่างจะเป็นศูนย์ แล้วบอก "ทรงตัว"
+ * ทั้งที่ราคากำลังร่วง — และ cron ยิงตรง :00 :15 :30 :45 พอดี จะเจอกรณีนี้แทบทุกรอบ
+ *
+ * ใช้ร่วมกันทั้งหน้าหลักและ cron จะได้ไม่คำนวณคนละแบบ
+ */
+export function liveQuote(p: PriceData): { price: number; ref: number } | undefined {
+  if (p.bars.length < 3) return undefined;
+  return { price: p.price, ref: p.bars[p.bars.length - 3].c };
 }
 
 export interface PriceData {

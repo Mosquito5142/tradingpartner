@@ -20,6 +20,11 @@ const ATR_PERIOD = 14;
 const FAST_THRESHOLD = 1.5;
 /** วัดความเร็วจากราคาเมื่อกี่แท่งที่แล้ว (8 แท่ง 15 นาที = 2 ชั่วโมง) */
 const SPEED_BARS = 8;
+/**
+ * ขยับน้อยกว่ากี่เท่าของ ATR ถึงเรียกว่า "ทรงตัว"
+ * ต่ำกว่านี้คือสัญญาณรบกวน บอกทิศทางไปก็ทำให้ผู้ใช้เข้าใจผิด
+ */
+const FLAT_ATR = 0.1;
 
 /**
  * ตัวเลขที่วัดได้จริง ใช้แสดงคู่กับสภาพปัจจุบันเสมอ
@@ -57,9 +62,11 @@ export interface Regime {
   fast: boolean;
   ema200: number;
   aboveEma: boolean;
-  /** แนวที่ราคากำลังวิ่งเข้าหา (ตามทิศที่ขยับใน 2 ชั่วโมงหลัง) */
+  /** แนวที่ราคากำลังวิ่งเข้าหา — ถ้าทรงตัวคือแนวที่ใกล้ที่สุดไม่ว่าฝั่งไหน */
   target: Level | null;
-  /** กำลังวิ่งขึ้นไปหาแนวไหม */
+  /** ทิศทางตอนนี้ — ราคาสดเทียบ 15–30 นาทีก่อน ไม่ใช่ผลต่าง 2 ชั่วโมง */
+  approach: "up" | "down" | "flat";
+  /** เท่ากับ approach === "up" — เก็บไว้ให้โค้ดเดิมที่ใช้ boolean */
   approachUp: boolean;
   /** ชนแนวนี้เป็นการเด้งตามเทรนด์ EMA200 ไหม */
   withTrend: boolean;
@@ -120,10 +127,15 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * @param bars       แท่งที่ใช้คำนวณตัวชี้วัด — ควรเป็นชุดเดียวกับที่ใช้วัดสถิติ (GC=F 60 วัน)
  *                   ไม่ใช่แท่งของโบรกเกอร์ที่มีแค่ไม่กี่วัน ไม่งั้นเปอร์เซ็นไทล์ ATR
  *                   จะเทียบกับหน้าต่างคนละขนาดกับตอนวัด
- * @param levelPrice ราคาในสเกลเดียวกับ levels ใช้เลือกแนวที่ราคากำลังวิ่งเข้าหาเท่านั้น
- *                   (แยกจาก bars เพราะสองชุดอาจคนละสเกล)
+ * @param live       ราคาสดจากโบรกเกอร์ (สเกลเดียวกับ levels) — ใช้ตัดสินทิศทางและระยะถึงแนว
+ *                   GC=F ของ Yahoo ช้า 10 นาที ถ้าใช้ตัดสินทิศ จะบอก "วิ่งขึ้น" ทั้งที่ราคาร่วงไปแล้ว
+ *                   ส่วน ATR/EMA/ความเร็ว ยังใช้ GC=F เพราะเป็นชุดที่ใช้วัดสถิติ และเปลี่ยนช้าอยู่แล้ว
  */
-export function readRegime(bars: Bar[], levels: Level[], levelPrice?: number): Regime | null {
+export function readRegime(
+  bars: Bar[],
+  levels: Level[],
+  live?: { price: number; ref: number },
+): Regime | null {
   if (bars.length < EMA_PERIOD + SPEED_BARS) return null;
 
   const emas = ema(bars);
@@ -137,20 +149,36 @@ export function readRegime(bars: Bar[], levels: Level[], levelPrice?: number): R
   const settled = atrs.slice(ATR_PERIOD * 3);
   const atrMedian = median(settled.length ? settled : atrs);
 
+  // ความเร็วดู 2 ชั่วโมงเหมือนตอนวัด — ห้ามเปลี่ยน ไม่งั้นตัวเลข 68.8%/44.2% ใช้ไม่ได้
   const before = bars[last - SPEED_BARS].c;
   const speed = Math.abs(price - before) / currentAtr;
-  const approachUp = price >= before;
 
-  // แนวที่ราคากำลังมุ่งหน้าไป ไม่ใช่แนวที่ใกล้ที่สุดเฉย ๆ
-  const refPrice = levelPrice ?? price;
-  const ahead = levels.filter((l) => (approachUp ? l.price > refPrice : l.price < refPrice));
-  const target = ahead.length
-    ? ahead.reduce((a, b) => (Math.abs(a.price - refPrice) <= Math.abs(b.price - refPrice) ? a : b))
+  // แต่ "ทิศทาง" ตอนวัดใช้แท่งก่อนหน้าแท่งเดียว (prev.c เทียบกับแนว) ไม่ใช่ผลต่าง 2 ชั่วโมง
+  // เวอร์ชันแรกเอาผลต่าง 2 ชม. มาใช้ จึงบอก "กำลังวิ่งขึ้น" ทั้งที่ราคาร่วงมาแล้ว 45 นาที
+  // เพียงเพราะยังสูงกว่าเมื่อ 2 ชม.ก่อนนิดเดียว — ผู้ใช้เห็นว่าระบบช้ากว่าราคาจริง
+  const nowP = live ? live.price : price;
+  // ไม่มีราคาสด: ใช้ GC=F แทน โดยข้ามแท่งที่เพิ่งปิดเหมือน liveQuote
+  // (แท่งสุดท้ายของ Yahoo ก็เป็นแท่งที่ยังไม่ปิด จึงมีปัญหาขอบแท่งแบบเดียวกัน)
+  const prevP = live ? live.ref : bars[last - 2].c;
+  const move = nowP - prevP;
+  const approach: Regime["approach"] =
+    Math.abs(move) < currentAtr * FLAT_ATR ? "flat" : move > 0 ? "up" : "down";
+  const approachUp = approach === "up";
+
+  // ทรงตัว = ยังไม่รู้จะไปทางไหน ดูแนวที่ใกล้ที่สุดทั้งสองฝั่ง
+  const refPrice = nowP;
+  const pool =
+    approach === "flat"
+      ? levels
+      : levels.filter((l) => (approachUp ? l.price > refPrice : l.price < refPrice));
+  const target = pool.length
+    ? pool.reduce((a, b) => (Math.abs(a.price - refPrice) <= Math.abs(b.price - refPrice) ? a : b))
     : null;
 
   const aboveEma = price > emas[last];
   // ชนแนวต้านระหว่างขาลง หรือชนแนวรับระหว่างขาขึ้น = เด้งไปทางเดียวกับเทรนด์
-  const withTrend = approachUp ? !aboveEma : aboveEma;
+  // ทรงตัวยังบอกไม่ได้ว่าจะชนแนวไหน จึงยังไม่นับว่าตามเทรนด์
+  const withTrend = approach === "flat" ? false : approachUp ? !aboveEma : aboveEma;
   const fast = speed > FAST_THRESHOLD;
   const highVol = currentAtr > atrMedian;
 
@@ -177,7 +205,9 @@ export function readRegime(bars: Bar[], levels: Level[], levelPrice?: number): R
     },
     {
       label: "ทิศทางเทียบเทรนด์ EMA200",
-      value: `${aboveEma ? "ราคาเหนือ" : "ราคาใต้"} EMA200 ($${round2(emas[last])}) · กำลังวิ่ง${approachUp ? "ขึ้น" : "ลง"}`,
+      value: `${aboveEma ? "ราคาเหนือ" : "ราคาใต้"} EMA200 ($${round2(emas[last])}) · ${
+        approach === "flat" ? "ทรงตัว" : `กำลังวิ่ง${approachUp ? "ขึ้น" : "ลง"}`
+      }`,
       stat: withTrend
         ? `เด้งตามเทรนด์ ${MEASURED.withTrend.pct}% (n=${MEASURED.withTrend.n})`
         : "เด้งสวนเทรนด์ไม่ต่างจากเดาสุ่มอย่างมีนัย",
@@ -204,6 +234,7 @@ export function readRegime(bars: Bar[], levels: Level[], levelPrice?: number): R
     ema200: round2(emas[last]),
     aboveEma,
     target,
+    approach,
     approachUp,
     withTrend,
     verdict,

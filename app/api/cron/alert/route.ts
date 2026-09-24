@@ -21,7 +21,7 @@ import {
   alreadySent, formatCard, isNotifyConfigured, LEAD_MIN, markSent, markSentId,
   pendingAlerts, sendTelegram, sentWithin,
 } from "@/lib/notify";
-import { loadPrice } from "@/lib/price";
+import { liveQuote, loadPrice } from "@/lib/price";
 import { readRegime } from "@/lib/regime";
 import { canSend, loadNotifySettings } from "@/lib/settings";
 import { buildRegimeSignal, COOLDOWN_SEC, type RegimeSignal } from "@/lib/signal";
@@ -41,7 +41,7 @@ async function checkRegime(): Promise<{ signal: RegimeSignal | null; skipped: st
   const regime = readRegime(
     price.profileBars.length >= 250 ? price.profileBars : price.bars,
     levels,
-    price.price,
+    liveQuote(price),
   );
 
   const [account, fx] = await Promise.all([loadAccount(), loadFx()]);

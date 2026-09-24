@@ -92,7 +92,10 @@ export function buildRegimeSignal(
   );
   lines.push(
     "",
-    `ราคา <b>${money(price)}</b> · กำลังไหล${regime.approachUp ? "ขึ้น" : "ลง"}เข้าหา` +
+    `ราคา <b>${money(price)}</b> · ` +
+      (regime.approach === "flat"
+        ? "ทรงตัวอยู่ใกล้"
+        : `กำลังไหล${regime.approachUp ? "ขึ้น" : "ลง"}เข้าหา`) +
       `${isSupport ? "แนวรับ" : "แนวต้าน"} <b>${money(regime.target.price)}</b> ` +
       `(ห่าง $${f2(distance)})`,
     `${regime.target.label}`,

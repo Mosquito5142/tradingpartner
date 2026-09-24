@@ -6,7 +6,7 @@ import { loadCalendar } from "./calendar";
 import { isConfigured } from "./db";
 import { todayHours, topWindows, volatilityProfile } from "./hours";
 import { buildLevels } from "./levels";
-import { loadPrice, type PriceData } from "./price";
+import { liveQuote, loadPrice, type PriceData } from "./price";
 import { readRegime, type Regime } from "./regime";
 import { allRecords, summarize, type LabSummary } from "./reactions";
 import { nowSec } from "./time";
@@ -83,7 +83,7 @@ export async function loadDashboard(): Promise<Dashboard> {
       ? readRegime(
           price.profileBars.length >= 250 ? price.profileBars : price.bars,
           levels,
-          price.price,
+          liveQuote(price),
         )
       : null,
     card: buildBriefing(items, now, records, price?.price, levels),

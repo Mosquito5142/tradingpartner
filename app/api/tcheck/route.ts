@@ -1,6 +1,7 @@
 import { phaseOf, pollFor, pickFocus, worthWatching, IMMINENT_MIN, WATCH_AFTER_MIN } from "@/lib/live";
 import { EDGE_WINDOW_MIN } from "@/lib/briefing";
 import { atr14, ema, readRegime } from "@/lib/regime";
+import { dedupeBars, liveQuote, type PriceData } from "@/lib/price";
 import { measure, MIN_SAMPLE } from "@/lib/reactions";
 import { detectCurrency, parseAccount } from "@/lib/mt5-import";
 import { equityCurve, lotProfile, wilson } from "@/lib/account";
@@ -164,6 +165,64 @@ export async function GET() {
     readRegime([...Array.from({ length: 242 }, () => bar(100)),
                 ...Array.from({ length: 8 }, (_, i) => bar(100 - (i + 1) * 0.1))], [level(120), level(90)])?.target?.price,
     90);
+
+  // ---- บั๊กที่ผู้ใช้เจอ: บอก "วิ่งขึ้น" ทั้งที่ราคากำลังลง ----
+  // 2 ชม.สุทธิขึ้น (100 -> 102) แต่แท่งล่าสุดร่วงลง (104 -> 102)
+  // สคริปต์ที่วัด 68.8% ตัดสินทิศจากแท่งก่อนหน้าแท่งเดียว ไม่ใช่ผลต่าง 2 ชม.
+  const upThenDown = [
+    ...Array.from({ length: 242 }, () => bar(100)),
+    bar(100.5), bar(101), bar(101.5), bar(102), bar(102.5), bar(103), bar(104),
+    bar(102),
+  ];
+  const ud = readRegime(upThenDown, [level(110), level(95)]);
+  t("ทิศทาง: ตัดสินจาก 15–30 นาทีหลัง ไม่ใช่ 2 ชม.", ud?.approach, "down");
+  t("ทิศทาง: ราคาลงอยู่ -> เล็งแนวรับข้างล่าง", ud?.target?.price, 95);
+
+  // ขยับน้อยกว่า 0.1 ATR = ไม่มีทิศ อย่ายืนยันทิศทางจากสัญญาณรบกวน
+  const flat = readRegime(
+    [...Array.from({ length: 249 }, () => bar(100)), bar(100.02)],
+    [level(103), level(99)],
+  );
+  t("ทิศทาง: ขยับนิดเดียว -> ทรงตัว", flat?.approach, "flat");
+  t("ทิศทาง: ทรงตัว -> เล็งแนวที่ใกล้ที่สุดไม่ว่าฝั่งไหน", flat?.target?.price, 99);
+
+  // ราคาสดจากโบรกฯ ต้องชนะข้อมูล GC=F ที่ช้า 10 นาที
+  // GC=F ยังบอกขึ้น (แท่งล่าสุดขึ้น) แต่ราคาสดบอกว่าร่วงลงแล้ว
+  const lagged = readRegime(
+    [...Array.from({ length: 249 }, () => bar(100)), bar(102)],
+    [level(4380), level(4300)],
+    { price: 4340, ref: 4350 },
+  );
+  t("ราคาสด: ใช้ทิศจากราคาสด ไม่ใช่ GC=F ที่ช้า", lagged?.approach, "down");
+  t("ราคาสด: ระยะถึงแนวคิดจากราคาสด", lagged?.target?.price, 4300);
+
+  // ---- ขอบแท่ง: cron ยิงตรง :00 :15 :30 :45 พอดี = แท่งใหม่เพิ่งเปิด ----
+  // ราคาร่วงมาต่อเนื่อง 110 -> 105 -> 100 แล้วแท่งใหม่เพิ่งเปิดที่ 100 (ยังไม่ขยับ)
+  // ถ้าเทียบกับแท่งที่เพิ่งปิด จะได้ 0 แล้วบอก "ทรงตัว" ทั้งที่กำลังร่วง
+  const pd = (closes: number[]): PriceData => ({
+    price: closes[closes.length - 1], spot: null, basis: 0, brokerOffset: 0,
+    bars: closes.map((c, i) => ({ ts: i * 900, o: c, h: c, l: c, c })),
+    profileBars: [], barSource: "PAXG", calibrated: true, fetchedAt: 0, errors: [],
+  });
+  const atBoundary = liveQuote(pd([110, 105, 100, 100]));
+  t("ขอบแท่ง: จุดอ้างอิงต้องห่างอย่างน้อย 15 นาที ไม่ใช่แท่งที่เพิ่งปิด",
+    atBoundary && atBoundary.price - atBoundary.ref, -5);
+  const reg2 = readRegime(
+    [...Array.from({ length: 249 }, () => bar(100)), bar(100)],
+    [level(120), level(90)],
+    atBoundary,
+  );
+  t("ขอบแท่ง: ราคากำลังร่วงต้องไม่บอกว่าทรงตัว", reg2?.approach, "down");
+  t("ขอบแท่ง: แท่งไม่พอ -> ไม่ส่งราคาสด", liveQuote(pd([100, 100])), undefined);
+
+  // ---- แท่งซ้ำ timestamp เดียวกัน (Yahoo ส่งแท่งที่ยังไม่ปิดซ้ำมา) ----
+  const dup = dedupeBars([
+    { ts: 1, o: 1, h: 1, l: 1, c: 1 },
+    { ts: 2, o: 2, h: 2, l: 2, c: 2 },
+    { ts: 2, o: 2, h: 3, l: 2, c: 2.5 },
+  ]);
+  t("แท่งซ้ำ: เหลือ timestamp ละแท่ง", dup.map((b) => b.ts), [1, 2]);
+  t("แท่งซ้ำ: เก็บตัวที่มาทีหลัง (ข้อมูลใหม่กว่า)", dup[1].c, 2.5);
 
   // ---- เทียบกับข้อมูลจริง: คำนวณซ้ำด้วยโค้ดคนละชุดในไฟล์นี้ ----
   try {
@@ -463,7 +522,7 @@ export async function GET() {
   const reg = (o: Partial<Regime> & { verdict: Regime["verdict"] }): Regime => ({
     atr: 6, atrMedian: 6, atrPct: 20, historyDays: 70, highVol: false,
     speed: 0.8, fast: false, ema200: 4300, aboveEma: false,
-    target: level(4350), approachUp: false, withTrend: true,
+    target: level(4350), approach: "down", approachUp: false, withTrend: true,
     headlinePct: 68.8, factors: [], ...o,
   });
 
